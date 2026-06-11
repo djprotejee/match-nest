@@ -1,0 +1,20 @@
+{
+  "name": "MatchNest",
+  "short_name": "MatchNest",
+  "description": "Personal spoiler-safe sports calendar for F1, NAVI CS2, and football.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#15171D",
+  "theme_color": "#15171D",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
+
