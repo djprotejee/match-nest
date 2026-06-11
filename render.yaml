@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: match-nest
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: MATCHNEST_ALLOW_DEMO_EVENTS
+        value: "0"
+      - key: FOOTBALL_DATA_TOKEN
+        sync: false
+      - key: FOOTBALL_DATA_TEAM_IDS
+        sync: false
+      - key: API_FOOTBALL_TOKEN
+        sync: false
+      - key: API_FOOTBALL_ENABLE
+        value: "0"
+      - key: API_FOOTBALL_TEAM_IDS
+        sync: false
+      - key: THESPORTSDB_API_KEY
+        sync: false
+      - key: PANDASCORE_TOKEN
+        sync: false
+      - key: GRID_API_TOKEN
+        sync: false
+      - key: APP_PUBLIC_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false

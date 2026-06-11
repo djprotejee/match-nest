@@ -7,6 +7,7 @@ MatchNest tracks followed events across Formula 1, NAVI CS2 and football, with s
 ## Stack
 
 - Backend: Python, FastAPI
+- Web PWA: React, TypeScript, Vite
 - iOS: Swift, SwiftUI
 - Widget: WidgetKit
 
@@ -18,39 +19,128 @@ MatchNest tracks followed events across Formula 1, NAVI CS2 and football, with s
 - Calendar: previous and future months
 - Spoiler mode: hide past results until revealed
 - Widget: next followed event
+- Accounts: email/password login, email verification, Google login
+- Explore: search, add custom teams/tournaments/players, bind provider IDs, move entities between main/starred/explore/hidden
 
-## Run backend
+## Local development
 
-Windows:
+Create the root environment file once:
 
 ```powershell
-cd backend
-py -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m uvicorn app.main:app --reload
+cp .env.example .env
 ```
 
-macOS:
+Run backend from the repository root:
 
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-uvicorn app.main:app --reload
+```powershell
+.\backend\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
+.\backend\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+```
+
+Run the PWA in another terminal:
+
+```powershell
+cd web
+npm install
+npm run dev
 ```
 
 Open:
 
 ```text
+http://127.0.0.1:5173
+```
+
+Useful backend checks:
+
+```text
+http://127.0.0.1:8000/health
+http://127.0.0.1:8000/sources
 http://127.0.0.1:8000/docs
+```
+
+## Production-like local run
+
+Build the PWA and serve it from FastAPI on one local URL:
+
+```powershell
+cd web
+npm install
+npm run build
+cd ..
+.\backend\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+```
+
+```text
+http://127.0.0.1:8000
+```
+
+## Production hosting
+
+The Docker setup builds the PWA and serves it from FastAPI, so production uses one public URL for both the app and API.
+
+```bash
+docker build -t match-nest .
+docker run --env-file .env -p 8000:8000 match-nest
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+For Render, use `render.yaml` and set these environment variables in the Render dashboard:
+
+- `DATABASE_URL`, required on Render free. Use a hosted Postgres connection string.
+- `FOOTBALL_DATA_TOKEN`
+- `API_FOOTBALL_TOKEN`
+- `API_FOOTBALL_ENABLE=1` if your API-Football plan supports the seasons you need.
+- `THESPORTSDB_API_KEY` optional. MatchNest defaults to the public key `3` for the Ukraine NT fallback feed.
+- `PANDASCORE_TOKEN`
+- `GRID_API_TOKEN` optional future CS2 stats provider token.
+- `APP_PUBLIC_URL`, for example `https://your-service.onrender.com`.
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` for Google login.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` for email verification.
+- `MATCHNEST_ALLOW_DEMO_EVENTS=0`
+
+Local development uses SQLite automatically when `DATABASE_URL` is empty:
+
+```text
+backend/.data
+```
+
+Production on Render free should set `DATABASE_URL` to a hosted Postgres database, for example Neon free Postgres, so accounts, follows, custom entities, manual pins and cached events persist across deploys.
+
+Render free setup:
+
+```text
+Render web service: free
+DATABASE_URL:       hosted Postgres connection string
+Persistent disk:    not needed
+```
+
+Google OAuth setup:
+
+```text
+Authorized redirect URI: https://your-service.onrender.com/auth/google/callback
+GOOGLE_REDIRECT_URI:     https://your-service.onrender.com/auth/google/callback
+APP_PUBLIC_URL:          https://your-service.onrender.com
+```
+
+For local Google login:
+
+```text
+Authorized redirect URI: http://127.0.0.1:8000/auth/google/callback
+GOOGLE_REDIRECT_URI:     http://127.0.0.1:8000/auth/google/callback
+APP_PUBLIC_URL:          http://127.0.0.1:8000
 ```
 
 ## Run tests
 
-```bash
-cd backend
-PYTHONPATH=. python -m unittest discover -s tests
+```powershell
+$env:PYTHONPATH='F:\Education\match-nest\backend'
+.\backend\.venv\Scripts\python.exe -m unittest discover -s backend\tests
 ```
 
 ## iOS
@@ -70,7 +160,39 @@ See `docs/ARCHITECTURE.md`.
 The backend uses real provider adapters:
 
 - Formula 1 via Jolpica Ergast-compatible API.
-- Football via football-data.org when `FOOTBALL_DATA_TOKEN` is set. The free plan includes fixtures and delayed schedules.
-- CS2 via PandaScore when `PANDASCORE_TOKEN` is set. CS upcoming, past, and running match endpoints are available to all plans.
+- Football via ESPN public soccer endpoints for tokenless future fixtures, including followed teams and followed tournaments. football-data.org remains available when `FOOTBALL_DATA_TOKEN` is set, but its free plan can restrict team-level national-team match endpoints. API-Football is optional and disabled by default because its free plan can reject modern/future seasons; set `API_FOOTBALL_ENABLE=1` only for a paid plan or explicit testing. TheSportsDB remains in code as a fallback adapter, but is not used in the normal provider cycle to avoid duplicate fixtures.
+- CS2 fixtures/results via PandaScore when `PANDASCORE_TOKEN` is set. CS upcoming, past, and running match endpoints are available to all plans.
+- Deep CS2 map/player/team statistics need a dedicated stats provider. `GRID_API_TOKEN` is reserved for GRID Open Access after access is approved.
 
 Demo fallback is disabled unless `MATCHNEST_ALLOW_DEMO_EVENTS=1`.
+
+The only `.env` file used by the backend is the repository root file:
+
+```text
+match-nest/.env
+```
+
+## Explore and provider bindings
+
+Explore is the home for managing what MatchNest follows.
+
+- Search can return local MatchNest entities and provider candidates.
+- Custom entities are saved in SQLite per user.
+- Seed entities can be moved between follow levels or hidden.
+- Custom entities can be edited or deleted by their owner.
+- Provider bindings connect an entity to external IDs.
+
+Binding format in the UI:
+
+```text
+provider:type=value
+```
+
+Examples:
+
+```text
+api-football:team_id=772
+espn:team_id=83
+pandascore:team_id=3214
+espn:league_slug=uefa.champions
+```

@@ -1,0 +1,13 @@
+.git
+.idea
+backend/.venv
+backend/__pycache__
+backend/app/__pycache__
+backend/app/providers/__pycache__
+backend/tests/__pycache__
+web/node_modules
+web/dist
+*.pyc
+*.tsbuildinfo
+.env
+

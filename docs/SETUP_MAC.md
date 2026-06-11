@@ -13,6 +13,14 @@ cd match-nest
 cp .env.example .env
 ```
 
+Keep this file at the repository root:
+
+```text
+match-nest/.env
+```
+
+Do not create a second `backend/.env`.
+
 Fill in tokens when you have them:
 
 ```text
@@ -79,4 +87,3 @@ Your iPhone and Mac must be on the same network.
 ## 7. Later: TestFlight
 
 Use TestFlight only after the app builds locally and the backend has a stable reachable URL.
-

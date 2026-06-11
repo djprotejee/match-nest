@@ -2,7 +2,7 @@
 
 ## Product shape
 
-MatchNest is a personal sports calendar with a native iPhone app, a WidgetKit widget, and a small Python backend that normalizes sports data from multiple providers into one event model.
+MatchNest is a personal sports calendar with a PWA, a future native iPhone app, a future WidgetKit widget, and a small Python backend that normalizes sports data from multiple providers into one event model.
 
 ## Backend responsibilities
 
@@ -17,6 +17,14 @@ MatchNest is a personal sports calendar with a native iPhone app, a WidgetKit wi
 - Render the timeline, calendar, and settings views.
 - Keep the UI compact and spoiler-safe by default.
 - Write a compact next-event payload into the shared app group store for WidgetKit.
+
+## Web PWA responsibilities
+
+- Provide the current primary client while native iOS tooling is blocked.
+- Render the same timeline, calendar, explore, and settings structure.
+- Cache the app shell through a service worker.
+- Support Add to Home Screen on iPhone through the web app manifest.
+- In production, the PWA is built into `web/dist` and served by FastAPI on the same origin as the API.
 
 ## Widget responsibilities
 
@@ -42,4 +50,3 @@ Spoiler mode is enforced on the backend response. This prevents accidental leaks
 - calendar event lists
 - widgets
 - future notification payloads
-

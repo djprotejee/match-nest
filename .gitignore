@@ -2,6 +2,7 @@
 .env
 __pycache__/
 *.pyc
+*.tsbuildinfo
 .pytest_cache/
 .idea/
 .DS_Store
@@ -9,5 +10,11 @@ DerivedData/
 *.xcuserdata/
 *.xcuserstate
 build/
+dist/
+node_modules/
+web/dist/
+web/node_modules/
+backend/.cache/
+backend/.data/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
