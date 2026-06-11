@@ -7,6 +7,7 @@ import base64
 import hashlib
 import hmac
 import secrets
+import threading
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,6 +30,9 @@ SESSION_DAYS = 30
 VERIFICATION_HOURS = 24
 DATABASE_URL_ENV = "DATABASE_URL"
 DATABASE_PROVIDER = os.getenv(DATABASE_URL_ENV, "").strip()
+POSTGRES_INIT_LOCK_KEY = 730219901
+_INIT_LOCK = threading.Lock()
+_INITIALIZED_DATABASES: set[str] = set()
 INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
 if psycopg is not None:
     INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg.errors.UniqueViolation)
@@ -82,13 +86,34 @@ def connect() -> sqlite3.Connection | PostgresConnection:
     database_url = os.getenv(DATABASE_URL_ENV, "").strip()
     if database_url:
         connection = PostgresConnection(database_url)
-        init_db(connection)
+        ensure_db_initialized(connection, f"postgres:{database_url}", use_postgres_lock=True)
         return connection
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
-    init_db(connection)
+    ensure_db_initialized(connection, f"sqlite:{DB_PATH.resolve()}", use_postgres_lock=False)
     return connection
+
+
+def ensure_db_initialized(
+    connection: sqlite3.Connection | PostgresConnection,
+    database_key: str,
+    use_postgres_lock: bool,
+) -> None:
+    if database_key in _INITIALIZED_DATABASES:
+        return
+    with _INIT_LOCK:
+        if database_key in _INITIALIZED_DATABASES:
+            return
+        if use_postgres_lock:
+            connection.execute("SELECT pg_advisory_lock(?)", (POSTGRES_INIT_LOCK_KEY,))
+        try:
+            init_db(connection)
+            _INITIALIZED_DATABASES.add(database_key)
+        finally:
+            if use_postgres_lock:
+                connection.execute("SELECT pg_advisory_unlock(?)", (POSTGRES_INIT_LOCK_KEY,))
+                connection.commit()
 
 
 def translate_sql_for_postgres(sql: str) -> tuple[str, bool]:
