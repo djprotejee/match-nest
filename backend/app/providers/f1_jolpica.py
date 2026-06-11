@@ -26,6 +26,10 @@ ALPHA_TO_ERGAST_SESSION_KEYS = {
     "FP2": "SecondPractice",
     "FP3": "ThirdPractice",
 }
+ERGAST_SESSION_KEYS = {
+    "qualifying": "Qualifying",
+    "sprint": "Sprint",
+}
 FASTF1_SESSION_FILTERS = {"SQ", "FP1", "FP2", "FP3"}
 FASTF1_CACHE_DIR = Path(__file__).resolve().parents[2] / ".data" / "fastf1-cache"
 
@@ -120,7 +124,7 @@ class JolpicaF1Provider(EventProvider):
     def _race_details(self, season: str, round_id: str) -> dict | None:
         race = first_race(fetch_json(f"{self.base_url}/{season}/{round_id}/results.json"))
         if race is None:
-            return None
+            return self._scheduled_session_details(season, round_id, "race", f"f1-{season}-{round_id}-race", "Race classification")
         results = race.get("Results", [])
         fastest = fastest_lap_result(results)
         strategies = fastf1_strategy_by_driver(season, round_id, "R")
@@ -156,7 +160,13 @@ class JolpicaF1Provider(EventProvider):
     def _qualifying_details(self, season: str, round_id: str) -> dict | None:
         race = first_race(fetch_json(f"{self.base_url}/{season}/{round_id}/qualifying.json"))
         if race is None:
-            return None
+            return self._scheduled_session_details(
+                season,
+                round_id,
+                "qualifying",
+                f"f1-{season}-{round_id}-qualifying",
+                "Qualifying classification",
+            )
         results = race.get("QualifyingResults", [])
 
         return {
@@ -177,7 +187,7 @@ class JolpicaF1Provider(EventProvider):
     def _sprint_details(self, season: str, round_id: str) -> dict | None:
         race = first_race(fetch_json(f"{self.base_url}/{season}/{round_id}/sprint.json"))
         if race is None:
-            return None
+            return self._scheduled_session_details(season, round_id, "sprint", f"f1-{season}-{round_id}-sprint", "Sprint classification")
         results = race.get("SprintResults", [])
         fastest = fastest_lap_result(results)
         strategies = fastf1_strategy_by_driver(season, round_id, "S")
@@ -262,6 +272,31 @@ class JolpicaF1Provider(EventProvider):
             return None
         key = ALPHA_TO_ERGAST_SESSION_KEYS.get(session_filter)
         session = race.get(key, {}) if key else {}
+        facts = race_facts(race, None)
+        starts_at = parse_utc_datetime(session)
+        if starts_at:
+            facts.append({"label": "Start", "value": starts_at.isoformat()})
+        return {
+            "event_id": event_id,
+            "sport": "formula",
+            "source": "jolpica",
+            "summary": f"{section_title.replace(' classification', '')} at {race_summary(race)}. Classification is not published by Jolpica for this session yet.",
+            "facts": facts,
+            "sections": [],
+        }
+
+    def _scheduled_session_details(
+        self,
+        season: str,
+        round_id: str,
+        session_key: str,
+        event_id: str,
+        section_title: str,
+    ) -> dict | None:
+        race = first_race(fetch_json(f"{self.base_url}/{season}/{round_id}.json"))
+        if race is None:
+            return None
+        session = race if session_key == "race" else race.get(ERGAST_SESSION_KEYS.get(session_key, ""), {})
         facts = race_facts(race, None)
         starts_at = parse_utc_datetime(session)
         if starts_at:
