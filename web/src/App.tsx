@@ -131,12 +131,16 @@ export function App() {
         fetchTimeline(range, !state.hideSpoilers),
         fetchEntities(),
       ]);
-      setTimeline(nextTimeline);
+      if (nextTimeline.length || timeline.length === 0) {
+        setTimeline(nextTimeline);
+      }
       setEntities(nextEntities);
       setOffline(false);
       setCacheNote(null);
       setLastError(null);
-      localStorage.setItem(timelineCacheKey(range, state.hideSpoilers), JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
+      if (nextTimeline.length || timeline.length === 0) {
+        localStorage.setItem(timelineCacheKey(range, state.hideSpoilers), JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
+      }
     } catch (error) {
       setLastError(readErrorMessage(error));
       const cached = loadCachedData(timelineCacheKey(range, state.hideSpoilers));
@@ -165,8 +169,12 @@ export function App() {
     }
     try {
       const nextGroups = await fetchCalendar(year, month, !state.hideSpoilers);
-      setCalendarGroups(nextGroups);
-      localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), groups: nextGroups }));
+      if (nextGroups.length || !cached) {
+        setCalendarGroups(nextGroups);
+      }
+      if (nextGroups.length || !cached) {
+        localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), groups: nextGroups }));
+      }
     } catch {
       if (!cached) {
         setCalendarGroups(fallbackTimeline);
@@ -592,7 +600,9 @@ function TimelineScreen(props: {
 
       {props.conflicts.length ? <ConflictPanel conflicts={props.conflicts} /> : null}
 
-      {props.loading ? (
+      {props.loading && props.groups.length ? <div className="refresh-note">Refreshing in background...</div> : null}
+
+      {props.loading && !props.groups.length ? (
         <div className="loading-card">Refreshing events...</div>
       ) : (
         <EventGroups

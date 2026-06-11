@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -15,6 +16,9 @@ from .football_data import (
     parse_entity_id_map,
 )
 from ..models import Event, EventStatus, Sport
+
+API_FOOTBALL_CACHE_TTL = timedelta(hours=12)
+API_FOOTBALL_TEAM_CACHE_TTL = timedelta(days=30)
 
 
 class ApiFootballProvider(EventProvider):
@@ -40,15 +44,13 @@ class ApiFootballProvider(EventProvider):
 
         for entity_id, team_id in self.resolved_team_entities().items():
             for season in api_football_seasons(start_date, end_date):
-                fixtures = self._request(
-                    "fixtures",
-                    {
-                        "team": str(team_id),
-                        "season": str(season),
-                        "from": start_date.isoformat(),
-                        "to": end_date.isoformat(),
-                    },
-                ).get("response", [])
+                params = {
+                    "team": str(team_id),
+                    "season": str(season),
+                    "from": start_date.isoformat(),
+                    "to": end_date.isoformat(),
+                }
+                fixtures = self._cached_request("fixtures", params, API_FOOTBALL_CACHE_TTL).get("response", [])
                 for item in fixtures:
                     event = self._fixture_to_event(item, entity_id)
                     if event is not None:
@@ -70,7 +72,7 @@ class ApiFootballProvider(EventProvider):
         normalized_queries = {normalize_team_name(query) for query in queries}
         for query in queries:
             try:
-                payload = self._request("teams", {"search": query})
+                payload = self._cached_request("teams", {"search": query}, API_FOOTBALL_TEAM_CACHE_TTL)
             except HTTPError:
                 continue
             candidates = payload.get("response", [])
@@ -80,6 +82,21 @@ class ApiFootballProvider(EventProvider):
                 team = item.get("team", {})
                 return team.get("id")
         return None
+
+    def _cached_request(self, endpoint: str, params: dict[str, str], max_age: timedelta) -> dict:
+        path = api_football_cache_path(endpoint, params)
+        cached = read_api_football_cache(path, max_age)
+        if cached is not None:
+            return cached
+        try:
+            payload = self._request(endpoint, params)
+        except Exception:
+            stale = read_api_football_cache(path, None)
+            if stale is not None:
+                return stale
+            raise
+        write_api_football_cache(path, payload)
+        return payload
 
     def _request(self, endpoint: str, params: dict[str, str]) -> dict:
         url = f"{self.base_url}/{endpoint}?{urlencode(params)}"
@@ -125,6 +142,40 @@ class ApiFootballProvider(EventProvider):
 
 def api_football_team_entities() -> dict[str, int]:
     return parse_entity_id_map(os.getenv("API_FOOTBALL_TEAM_IDS", ""))
+
+
+def api_football_cache_path(endpoint: str, params: dict[str, str]) -> Path:
+    safe = "_".join(f"{key}-{value}" for key, value in sorted(params.items()))
+    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in safe)
+    return Path(__file__).resolve().parents[2] / ".cache" / f"api-football-{endpoint}-{safe}.json"
+
+
+def read_api_football_cache(path: Path, max_age: timedelta | None) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if max_age is not None:
+        cached_at = payload.get("cached_at")
+        if not cached_at:
+            return None
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(cached_at).astimezone(timezone.utc)
+        except ValueError:
+            return None
+        if age > max_age:
+            return None
+    return payload.get("payload")
+
+
+def write_api_football_cache(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"cached_at": datetime.now(timezone.utc).isoformat(), "payload": payload}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def api_football_seasons(start_date: date, end_date: date) -> list[int]:

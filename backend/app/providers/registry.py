@@ -33,7 +33,7 @@ class ProviderResult:
 
 _CACHE_TTL = timedelta(minutes=1)
 _CACHE: dict[str, tuple[datetime, list[ProviderResult], list[Event]]] = {}
-PROVIDER_SYNC_TIMEOUT_SECONDS = 8
+PROVIDER_SYNC_TIMEOUT_SECONDS = 0.25
 _PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 _IN_FLIGHT_LOCK = threading.Lock()
 _IN_FLIGHT_REFRESHES: dict[str, Future] = {}
@@ -112,6 +112,9 @@ def provider_results(
 
         refresh_key = f"{name}:{cache_key}"
         future = refresh_provider_async(refresh_key, provider, name, cache_key, start, end)
+        if cached_count > 0:
+            results.append(ProviderResult(name=name, configured=True, count=cached_count))
+            continue
         try:
             provider_events = future.result(timeout=PROVIDER_SYNC_TIMEOUT_SECONDS)
             results.append(ProviderResult(name=name, configured=True, count=len(provider_events)))

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import json
-from datetime import datetime
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
@@ -49,6 +50,30 @@ from .storage import (
 )
 
 app = FastAPI(title="MatchNest API", version="0.1.0")
+
+
+@app.on_event("startup")
+def warm_default_calendar_cache_on_startup() -> None:
+    # Render free instances can sleep. Warm the main calendar in the background
+    # so the first user navigation does not have to trigger every provider.
+    thread = threading.Thread(target=warm_default_calendar_cache, daemon=True)
+    thread.start()
+
+
+def warm_default_calendar_cache() -> None:
+    try:
+        preferences = preferences_for_user(None)
+        now = datetime.now(timezone.utc)
+        for month in range(now.month, 13):
+            start = datetime(now.year, month, 1, tzinfo=timezone.utc)
+            if month == 12:
+                end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+            else:
+                end = datetime(now.year, month + 1, 1, tzinfo=timezone.utc)
+            provider_results(start, end, preferences)
+    except Exception:
+        # Cache warming is best-effort; request handlers still refresh on demand.
+        return
 
 app.add_middleware(
     CORSMiddleware,
