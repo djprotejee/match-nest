@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -31,6 +33,10 @@ class ProviderResult:
 
 _CACHE_TTL = timedelta(minutes=1)
 _CACHE: dict[str, tuple[datetime, list[ProviderResult], list[Event]]] = {}
+PROVIDER_SYNC_TIMEOUT_SECONDS = 8
+_PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+_IN_FLIGHT_LOCK = threading.Lock()
+_IN_FLIGHT_REFRESHES: dict[str, Future] = {}
 
 PROVIDER_REFRESH_TTL = {
     "JolpicaF1Provider": timedelta(hours=24),
@@ -104,11 +110,20 @@ def provider_results(
             results.append(ProviderResult(name=name, configured=True, count=cached_count))
             continue
 
+        refresh_key = f"{name}:{cache_key}"
+        future = refresh_provider_async(refresh_key, provider, name, cache_key, start, end)
         try:
-            provider_events = provider.fetch(start=start, end=end)
-            upsert_events(provider_events)
-            mark_provider_fetch(name, cache_key, "ok")
+            provider_events = future.result(timeout=PROVIDER_SYNC_TIMEOUT_SECONDS)
             results.append(ProviderResult(name=name, configured=True, count=len(provider_events)))
+        except TimeoutError:
+            results.append(
+                ProviderResult(
+                    name=name,
+                    configured=True,
+                    count=cached_count,
+                    error=f"Refresh is still running in the background after {PROVIDER_SYNC_TIMEOUT_SECONDS}s.",
+                )
+            )
         except HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             error = f"HTTP {exc.code}: {body}"
@@ -137,6 +152,52 @@ def provider_results(
 
     _CACHE[cache_key] = (datetime.now(), results, events)
     return results, events
+
+
+def refresh_provider_async(
+    refresh_key: str,
+    provider: EventProvider,
+    provider_name: str,
+    cache_key: str,
+    start: datetime | None,
+    end: datetime | None,
+) -> Future:
+    with _IN_FLIGHT_LOCK:
+        existing = _IN_FLIGHT_REFRESHES.get(refresh_key)
+        if existing and not existing.done():
+            return existing
+        future = _PROVIDER_EXECUTOR.submit(refresh_provider, provider, provider_name, cache_key, start, end)
+        _IN_FLIGHT_REFRESHES[refresh_key] = future
+        future.add_done_callback(lambda _: clear_in_flight_refresh(refresh_key))
+        return future
+
+
+def clear_in_flight_refresh(refresh_key: str) -> None:
+    with _IN_FLIGHT_LOCK:
+        future = _IN_FLIGHT_REFRESHES.get(refresh_key)
+        if future and future.done():
+            _IN_FLIGHT_REFRESHES.pop(refresh_key, None)
+
+
+def refresh_provider(
+    provider: EventProvider,
+    provider_name: str,
+    cache_key: str,
+    start: datetime | None,
+    end: datetime | None,
+) -> list[Event]:
+    try:
+        provider_events = provider.fetch(start=start, end=end)
+        upsert_events(provider_events)
+        mark_provider_fetch(provider_name, cache_key, "ok")
+        return provider_events
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        mark_provider_fetch(provider_name, cache_key, "error", f"HTTP {exc.code}: {body}")
+        raise
+    except Exception as exc:
+        mark_provider_fetch(provider_name, cache_key, "error", str(exc))
+        raise
 
 
 def fetch_events(
