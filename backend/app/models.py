@@ -21,6 +21,7 @@ class Sport(str, Enum):
 class EntityKind(str, Enum):
     TEAM = "team"
     COMPETITION = "competition"
+    PLAYER = "player"
     SESSION_TYPE = "session_type"
 
 
@@ -35,6 +36,7 @@ class FollowLevel(str, Enum):
 class EventStatus(str, Enum):
     PAST = "past"
     LIVE = "live"
+    DELAYED = "delayed"
     UPCOMING = "upcoming"
     TBD = "tbd"
 
@@ -96,3 +98,32 @@ class UserPreferences:
 
     def follow_for(self, entity_id: str) -> Follow | None:
         return self.follows.get(entity_id)
+
+
+@dataclass(frozen=True)
+class UserAccount:
+    id: int
+    email: str
+    email_verified_at: datetime | None
+    created_at: datetime
+
+    @property
+    def is_email_verified(self) -> bool:
+        return self.email_verified_at is not None
+
+
+@dataclass(frozen=True)
+class EntityBinding:
+    provider: str
+    binding_type: str
+    value: str
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EntityRecord:
+    entity: Entity
+    aliases: list[str] = field(default_factory=list)
+    bindings: list[EntityBinding] = field(default_factory=list)
+    is_seed: bool = False
+    created_by_user_id: int | None = None

@@ -31,7 +31,7 @@ class ServiceTests(unittest.TestCase):
         event = next(item for item in self.events if item.id == "barca-past-demo")
         payload = serialize_event(event, DEFAULT_PREFERENCES)
         self.assertTrue(payload["result_hidden"])
-        self.assertIsNone(payload["result_summary"])
+        self.assertEqual(payload["result_summary"], "Barcelona 2-1 Real Madrid")
 
     def test_spoiler_result_can_be_revealed(self) -> None:
         event = next(item for item in self.events if item.id == "barca-past-demo")
@@ -68,7 +68,17 @@ class ServiceTests(unittest.TestCase):
         finally:
             DEFAULT_PREFERENCES.f1_sessions.discard(F1Session.PRACTICE)
 
+    def test_api_payload_can_include_practice_for_client_filtering(self) -> None:
+        filtered = filter_events(
+            self.events,
+            DEFAULT_PREFERENCES,
+            sports={Sport.FORMULA},
+            apply_f1_session_filter=False,
+        )
+        ids = {event.id for event in filtered}
+        self.assertIn("f1-race-demo", ids)
+        self.assertIn("f1-practice-demo", ids)
+
 
 if __name__ == "__main__":
     unittest.main()
-

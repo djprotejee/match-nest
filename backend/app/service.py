@@ -34,6 +34,7 @@ def should_show_event(
     levels: set[FollowLevel] | None = None,
     sports: set[Sport] | None = None,
     statuses: set[EventStatus] | None = None,
+    apply_f1_session_filter: bool = True,
 ) -> bool:
     # Visibility is resolved before date filtering because hidden entities should
     # never leak into timeline, calendar, widget, or notification payloads.
@@ -46,7 +47,7 @@ def should_show_event(
         return False
     if statuses and event.status not in statuses:
         return False
-    if event.sport == Sport.FORMULA and event.session_type not in preferences.f1_sessions:
+    if apply_f1_session_filter and event.sport == Sport.FORMULA and event.session_type not in preferences.f1_sessions:
         return False
     return True
 
@@ -59,10 +60,11 @@ def filter_events(
     levels: set[FollowLevel] | None = None,
     sports: set[Sport] | None = None,
     statuses: set[EventStatus] | None = None,
+    apply_f1_session_filter: bool = True,
 ) -> list[Event]:
     result = []
     for event in events:
-        if not should_show_event(event, preferences, levels, sports, statuses):
+        if not should_show_event(event, preferences, levels, sports, statuses, apply_f1_session_filter):
             continue
         if event.starts_at is not None:
             event_start = event.starts_at.astimezone(KYIV_TZ)
@@ -114,7 +116,7 @@ def serialize_event(event: Event, preferences: UserPreferences, reveal_spoilers:
     payload["starts_at"] = event.starts_at.isoformat() if event.starts_at else None
     payload["follow_level"] = level.value
     payload["result_hidden"] = hide_result
-    payload["result_summary"] = None if hide_result else event.result_summary
+    payload["result_summary"] = event.result_summary
     return payload
 
 
