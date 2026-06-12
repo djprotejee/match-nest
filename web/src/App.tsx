@@ -60,7 +60,7 @@ import {
   visibleCalendarDays,
 } from "./dateUtils";
 import { fallbackEntities, fallbackTimeline } from "./demoData";
-import { appendManualPins, filterGroups, findConflicts, flattenGroups, mergeFollowOverrides } from "./eventFilters";
+import { appendManualPins, filterGroups, findConflicts, flattenGroups, followLevelsForFeedMode, mergeFollowOverrides } from "./eventFilters";
 import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, EventStatus, FollowLevel, MatchEvent, RangeFilter, RegisterResponse, Sport } from "./types";
 
 type Tab = "timeline" | "calendar" | "explore" | "settings";
@@ -160,7 +160,7 @@ export function App() {
     if (currentUser && accountSettingsLoaded) {
       void loadTimeline();
     }
-  }, [range, state.hideSpoilers, currentUser, accountSettingsLoaded]);
+  }, [range, feedMode, state.hideSpoilers, currentUser, accountSettingsLoaded]);
 
   useEffect(() => {
     if (currentUser && accountSettingsLoaded) {
@@ -172,7 +172,7 @@ export function App() {
     setLoading(true);
     try {
       const [nextTimeline, nextEntities] = await Promise.all([
-        fetchTimeline(range, !state.hideSpoilers),
+        fetchTimeline(range, !state.hideSpoilers, followLevelsForFeedMode(feedMode)),
         fetchEntities(),
       ]);
       if (nextTimeline.length || timeline.length === 0) {
@@ -184,14 +184,14 @@ export function App() {
       setCacheNote(null);
       setLastError(null);
       if (nextTimeline.length || timeline.length === 0) {
-        localStorage.setItem(timelineCacheKey(range, state.hideSpoilers), JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
+        localStorage.setItem(timelineCacheKey(range, state.hideSpoilers, feedMode), JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
       }
       if (!nextTimeline.length) {
         scheduleTimelineRetry();
       }
     } catch (error) {
       setLastError(readErrorMessage(error));
-      const cached = loadCachedData(timelineCacheKey(range, state.hideSpoilers));
+      const cached = loadCachedData(timelineCacheKey(range, state.hideSpoilers, feedMode));
       if (cached) {
         setTimeline(cached.timeline);
         setEntities(cached.entities);
@@ -288,8 +288,9 @@ export function App() {
     if (isRangeFilter(uiState.range)) {
       setRange(uiState.range);
     }
-    if (isFeedMode(uiState.feedMode)) {
-      setFeedMode(uiState.feedMode);
+    const nextFeedMode = normalizeFeedMode(uiState.feedMode);
+    if (nextFeedMode) {
+      setFeedMode(nextFeedMode);
     }
     if (isImportanceMode(uiState.importanceMode)) {
       setImportanceMode(uiState.importanceMode);
@@ -311,7 +312,7 @@ export function App() {
   }
 
   function scheduleTimelineRetry() {
-    const retryKey = timelineCacheKey(range, state.hideSpoilers);
+    const retryKey = timelineCacheKey(range, state.hideSpoilers, feedMode);
     if (timelineRetryRef.current !== null || timelineRetriedKeyRef.current === retryKey) {
       return;
     }
@@ -654,7 +655,9 @@ function TimelineScreen(props: {
           value={props.feedMode}
           options={[
             ["main", "Main"],
-            ["starred", "Starred"],
+            ["starred_only", "Starred"],
+            ["main_starred", "Main + Starred"],
+            ["starred_explore", "Starred + Explore"],
             ["all", "All"],
           ]}
           onChange={(value) => props.setFeedMode(value as FeedMode)}
@@ -789,7 +792,9 @@ function CalendarScreen(props: {
           value={props.feedMode}
           options={[
             ["main", "Main"],
-            ["starred", "Starred"],
+            ["starred_only", "Starred"],
+            ["main_starred", "Main + Starred"],
+            ["starred_explore", "Starred + Explore"],
             ["all", "All"],
           ]}
           onChange={(value) => props.setFeedMode(value as FeedMode)}
@@ -1840,8 +1845,8 @@ function loadCachedData(cacheKey: string): { at: number; timeline: DayGroup[]; e
   }
 }
 
-function timelineCacheKey(range: RangeFilter, hideSpoilers: boolean): string {
-  return `${CACHE_PREFIX}${range}.${hideSpoilers ? "hidden" : "revealed"}`;
+function timelineCacheKey(range: RangeFilter, hideSpoilers: boolean, feedMode: FeedMode): string {
+  return `${CACHE_PREFIX}${range}.${feedMode}.${hideSpoilers ? "hidden" : "revealed"}`;
 }
 
 function calendarCacheKey(year: number, month: number): string {
@@ -1908,7 +1913,14 @@ function isRangeFilter(value: unknown): value is RangeFilter {
 }
 
 function isFeedMode(value: unknown): value is FeedMode {
-  return value === "main" || value === "starred" || value === "all";
+  return value === "main" || value === "starred_only" || value === "main_starred" || value === "starred_explore" || value === "all";
+}
+
+function normalizeFeedMode(value: unknown): FeedMode | null {
+  if (value === "starred") {
+    return "main_starred";
+  }
+  return isFeedMode(value) ? value : null;
 }
 
 function isImportanceMode(value: unknown): value is ImportanceMode {

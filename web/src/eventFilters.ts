@@ -2,6 +2,22 @@ import type { AppState, FeedMode, ImportanceMode } from "./appState";
 import { localDateKey } from "./dateUtils";
 import type { DayGroup, EntityItem, EventStatus, FollowLevel, MatchEvent, RangeFilter, Sport } from "./types";
 
+export function followLevelsForFeedMode(feedMode: FeedMode): FollowLevel[] {
+  if (feedMode === "main") {
+    return ["main"];
+  }
+  if (feedMode === "starred_only") {
+    return ["starred"];
+  }
+  if (feedMode === "main_starred") {
+    return ["main", "starred"];
+  }
+  if (feedMode === "starred_explore") {
+    return ["starred", "explore"];
+  }
+  return ["main", "starred", "explore", "muted"];
+}
+
 export function mergeFollowOverrides(entities: EntityItem[], follows: Record<string, FollowLevel>): EntityItem[] {
   return entities.map((entity) => ({ ...entity, follow: follows[entity.id] || entity.follow }));
 }
@@ -79,10 +95,7 @@ function shouldShowEvent(
   if (event.follow_level === "hidden") {
     return false;
   }
-  if (options.feedMode === "main" && event.follow_level !== "main") {
-    return false;
-  }
-  if (options.feedMode === "starred" && !["main", "starred"].includes(event.follow_level)) {
+  if (!followLevelsForFeedMode(options.feedMode).includes(event.follow_level)) {
     return false;
   }
   if (options.importanceMode === "main" && event.follow_level !== "main") {

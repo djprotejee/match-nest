@@ -210,7 +210,7 @@ h2 {
 
 .segmented-control {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 4px;
   padding: 4px;
   border: 1px solid #303545;

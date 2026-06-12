@@ -15,6 +15,7 @@ from .base import EventProvider
 from .api_football import ApiFootballProvider
 from .espn_football import ESPN_FOOTBALL_COMPETITIONS, ESPN_FOOTBALL_TEAMS, EspnFootballProvider
 from .f1_jolpica import JolpicaF1Provider
+from .f4_calendar import F4CalendarProvider
 from .football_data import FootballDataProvider, football_competition_entities
 from .thesportsdb import TheSportsDBFootballProvider
 from .pandascore import PandaScoreCS2Provider
@@ -40,6 +41,7 @@ _IN_FLIGHT_REFRESHES: dict[str, Future] = {}
 
 PROVIDER_REFRESH_TTL = {
     "JolpicaF1Provider": timedelta(hours=24),
+    "F4CalendarProvider": timedelta(days=7),
     "FootballDataProvider": timedelta(hours=12),
     "EspnFootballProvider": timedelta(hours=6),
     "ApiFootballProvider": timedelta(hours=12),
@@ -61,6 +63,7 @@ def configured_providers(preferences: UserPreferences | None = None) -> list[Eve
     active_preferences = preferences or DEFAULT_PREFERENCES
     return [
         JolpicaF1Provider(),
+        F4CalendarProvider(),
         FootballDataProvider(
             competition_entities=followed_football_competitions(active_preferences),
             team_queries=followed_football_team_queries(active_preferences),
@@ -249,7 +252,9 @@ def provider_should_refresh(provider_name: str, cache_key: str) -> bool:
 
 def provider_matches_event(provider_name: str, event: Event) -> bool:
     if provider_name == "JolpicaF1Provider":
-        return event.sport == Sport.FORMULA
+        return event.source == "jolpica"
+    if provider_name == "F4CalendarProvider":
+        return event.source == "f4-calendar"
     if provider_name in {"FootballDataProvider", "EspnFootballProvider", "ApiFootballProvider", "TheSportsDBFootballProvider"}:
         return event.sport == Sport.FOOTBALL
     if provider_name == "PandaScoreCS2Provider":
@@ -421,6 +426,7 @@ def dedupe_cross_source_events(events: list[Event]) -> list[Event]:
         "thesportsdb": 30,
         "pandascore": 50,
         "jolpica": 50,
+        "f4-calendar": 45,
     }
     by_key: dict[tuple[str, str, str], Event] = {}
     for event in events:

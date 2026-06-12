@@ -21,9 +21,14 @@ export function saveApiBaseUrl(value: string): void {
   localStorage.setItem("matchnest.apiUrl", normalizeApiBaseUrl(value));
 }
 
-export async function fetchTimeline(range: RangeFilter, revealSpoilers: boolean): Promise<DayGroup[]> {
+export async function fetchTimeline(
+  range: RangeFilter,
+  revealSpoilers: boolean,
+  levels: FollowLevel[] = ["main", "starred"],
+): Promise<DayGroup[]> {
   const url = apiUrl("timeline");
   url.searchParams.set("range", range);
+  url.searchParams.set("level", levels.join(","));
   url.searchParams.set("reveal_spoilers", revealSpoilers ? "true" : "false");
   return getJson<DayGroup[]>(url);
 }
