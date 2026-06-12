@@ -99,6 +99,7 @@ For Render, use `render.yaml` and set these environment variables in the Render 
 - `THESPORTSDB_API_KEY` optional. MatchNest defaults to the public key `3` for the Ukraine NT fallback feed.
 - `PANDASCORE_TOKEN`
 - `GRID_API_TOKEN` optional future CS2 stats provider token.
+- `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` for browser and iPhone push notifications.
 - `APP_PUBLIC_URL`, for example `https://your-service.onrender.com`.
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` for Google login.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` for email verification.
@@ -135,6 +136,31 @@ Authorized redirect URI: http://127.0.0.1:8000/auth/google/callback
 GOOGLE_REDIRECT_URI:     http://127.0.0.1:8000/auth/google/callback
 APP_PUBLIC_URL:          http://127.0.0.1:8000
 ```
+
+Push notification setup:
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
+.\backend\.venv\Scripts\python.exe -m py_vapid --gen
+.\backend\.venv\Scripts\python.exe -m py_vapid --applicationServerKey --private-key private_key.pem
+```
+
+Use the `Application Server Key` output as `VAPID_PUBLIC_KEY`.
+
+Use the private key body from `private_key.pem` as `VAPID_PRIVATE_KEY`, without these lines:
+
+```text
+-----BEGIN PRIVATE KEY-----
+-----END PRIVATE KEY-----
+```
+
+Join the remaining private-key lines into one line before pasting into Render. Set `VAPID_SUBJECT` to your email in this format:
+
+```text
+mailto:you@example.com
+```
+
+Do not commit `private_key.pem` or `public_key.pem`.
 
 ## Run tests
 

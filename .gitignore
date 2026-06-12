@@ -3,6 +3,8 @@
 __pycache__/
 *.pyc
 *.tsbuildinfo
+private_key.pem
+public_key.pem
 .pytest_cache/
 .idea/
 .DS_Store
