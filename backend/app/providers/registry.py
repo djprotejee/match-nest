@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -36,8 +36,7 @@ class ProviderResult:
 
 _CACHE_TTL = timedelta(minutes=1)
 _CACHE: dict[str, tuple[datetime, list[ProviderResult], list[Event]]] = {}
-PROVIDER_SYNC_TIMEOUT_SECONDS = 0.25
-_PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+_PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=6)
 _IN_FLIGHT_LOCK = threading.Lock()
 _IN_FLIGHT_REFRESHES: dict[str, Future] = {}
 
@@ -64,22 +63,22 @@ def configured_providers(preferences: UserPreferences | None = None) -> list[Eve
     load_environment()
     active_preferences = preferences or DEFAULT_PREFERENCES
     return [
+        PandaScoreCS2Provider(),
         JolpicaF1Provider(),
         F4CalendarProvider(),
-        FootballDataProvider(
-            competition_entities=followed_football_competitions(active_preferences),
-            team_queries=followed_football_team_queries(active_preferences),
-        ),
         EspnFootballProvider(
             team_ids=followed_espn_team_ids(active_preferences),
             competition_entities=followed_espn_competitions(active_preferences),
+        ),
+        FootballDataProvider(
+            competition_entities=followed_football_competitions(active_preferences),
+            team_queries=followed_football_team_queries(active_preferences),
         ),
         ApiFootballProvider(
             team_queries=followed_football_team_queries(active_preferences),
             team_entities=followed_api_football_team_ids(active_preferences),
         ),
         TheSportsDBFootballProvider(team_ids=followed_thesportsdb_team_ids(active_preferences)),
-        PandaScoreCS2Provider(),
     ]
 
 
@@ -116,31 +115,15 @@ def provider_results(
             continue
 
         refresh_key = f"{name}:{cache_key}"
-        future = refresh_provider_async(refresh_key, provider, name, cache_key, start, end)
-        if cached_count > 0:
-            results.append(ProviderResult(name=name, configured=True, count=cached_count))
-            continue
-        try:
-            provider_events = future.result(timeout=PROVIDER_SYNC_TIMEOUT_SECONDS)
-            results.append(ProviderResult(name=name, configured=True, count=len(provider_events)))
-        except TimeoutError:
-            results.append(
-                ProviderResult(
-                    name=name,
-                    configured=True,
-                    count=cached_count,
-                    error=f"Refresh is still running in the background after {PROVIDER_SYNC_TIMEOUT_SECONDS}s.",
-                )
+        refresh_provider_async(refresh_key, provider, name, cache_key, start, end)
+        results.append(
+            ProviderResult(
+                name=name,
+                configured=True,
+                count=cached_count,
+                error=None if cached_count else "Refresh is running in the background.",
             )
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            error = f"HTTP {exc.code}: {body}"
-            mark_provider_fetch(name, cache_key, "error", error)
-            results.append(ProviderResult(name=name, configured=True, count=cached_count, error=error))
-        except Exception as exc:
-            error = str(exc)
-            mark_provider_fetch(name, cache_key, "error", error)
-            results.append(ProviderResult(name=name, configured=True, count=cached_count, error=error))
+        )
 
     events = dedupe_cross_source_events(list_events(start, end))
     if events:

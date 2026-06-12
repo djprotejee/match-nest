@@ -74,13 +74,16 @@ def warm_default_calendar_cache() -> None:
     try:
         preferences = preferences_for_user(None)
         now = datetime.now(timezone.utc)
-        for month in range(now.month, 13):
-            start = datetime(now.year, month, 1, tzinfo=timezone.utc)
+        months_to_warm = [((now.month - 1 + offset) % 12) + 1 for offset in range(2)]
+        for index, month in enumerate(months_to_warm):
+            year = now.year + ((now.month - 1 + index) // 12)
+            start = datetime(year, month, 1, tzinfo=timezone.utc)
             if month == 12:
-                end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+                end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
             else:
-                end = datetime(now.year, month + 1, 1, tzinfo=timezone.utc)
+                end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
             provider_results(start, end, preferences)
+            time.sleep(2)
     except Exception:
         # Cache warming is best-effort; request handlers still refresh on demand.
         return
