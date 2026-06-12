@@ -1,4 +1,4 @@
-import type { AuthResponse, AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, FollowLevel, RangeFilter, RegisterResponse, Sport } from "./types";
+import type { AccountSettings, AuthResponse, AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, FollowLevel, RangeFilter, RegisterResponse, Sport } from "./types";
 
 const DEFAULT_API_URL = import.meta.env.DEV ? `${window.location.origin}/api/` : `${window.location.origin}/`;
 const AUTH_TOKEN_KEY = "matchnest.auth.token";
@@ -136,6 +136,18 @@ export async function verifyEmailToken(token: string): Promise<AuthResponse> {
 export async function fetchCurrentUser(): Promise<AuthUser> {
   const response = await getJson<{ user: AuthUser }>(apiUrl("auth/me"));
   return response.user;
+}
+
+export async function fetchAccountSettings(): Promise<AccountSettings> {
+  return getJson<AccountSettings>(apiUrl("settings"));
+}
+
+export async function saveAccountSettings(input: {
+  f1_sessions?: string[];
+  hide_spoilers?: boolean;
+  ui_state?: Record<string, unknown>;
+}): Promise<void> {
+  await postJson("settings", input);
 }
 
 export async function logoutAccount(): Promise<void> {

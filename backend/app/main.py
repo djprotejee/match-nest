@@ -44,6 +44,8 @@ from .storage import (
     search_entity_records,
     set_user_f1_sessions,
     set_user_follow,
+    set_user_hide_spoilers,
+    set_user_ui_state,
     update_custom_entity,
     user_for_session,
     verify_email,
@@ -98,6 +100,12 @@ class FollowUpdate(BaseModel):
 
 class F1SessionsUpdate(BaseModel):
     sessions: list[F1Session]
+
+
+class AccountSettingsUpdate(BaseModel):
+    f1_sessions: list[F1Session] | None = None
+    hide_spoilers: bool | None = None
+    ui_state: dict | None = None
 
 
 class RegisterRequest(BaseModel):
@@ -382,6 +390,38 @@ def set_f1_sessions(update: F1SessionsUpdate, current_user: UserAccount = Depend
     update_f1_sessions(preferences, [session.value for session in update.sessions])
     set_user_f1_sessions(current_user.id, preferences.f1_sessions)
     return {"ok": True, "sessions": [session.value for session in preferences.f1_sessions]}
+
+
+@app.get("/settings")
+def account_settings(current_user: UserAccount = Depends(require_user)) -> dict:
+    preferences = preferences_for_user(current_user.id)
+    return {
+        "f1_sessions": [session.value for session in preferences.f1_sessions],
+        "hide_spoilers": preferences.default_hide_spoilers,
+        "ui_state": preferences.ui_state,
+    }
+
+
+@app.put("/settings")
+def set_account_settings(update: AccountSettingsUpdate, current_user: UserAccount = Depends(require_user)) -> dict:
+    preferences = preferences_for_user(current_user.id)
+    if update.f1_sessions is not None:
+        update_f1_sessions(preferences, [session.value for session in update.f1_sessions])
+        set_user_f1_sessions(current_user.id, preferences.f1_sessions)
+    if update.ui_state is not None:
+        set_user_ui_state(current_user.id, update.ui_state)
+    if update.hide_spoilers is not None:
+        set_user_hide_spoilers(current_user.id, update.hide_spoilers)
+        ui_state = dict(update.ui_state or preferences.ui_state)
+        ui_state["hideSpoilers"] = update.hide_spoilers
+        set_user_ui_state(current_user.id, ui_state)
+    next_preferences = preferences_for_user(current_user.id)
+    return {
+        "ok": True,
+        "f1_sessions": [session.value for session in next_preferences.f1_sessions],
+        "hide_spoilers": next_preferences.default_hide_spoilers,
+        "ui_state": next_preferences.ui_state,
+    }
 
 
 @app.post("/auth/register")

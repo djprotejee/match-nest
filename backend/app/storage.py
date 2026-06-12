@@ -249,6 +249,16 @@ def init_db(connection: sqlite3.Connection | PostgresConnection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS user_ui_state (
+            user_id INTEGER PRIMARY KEY,
+            state_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS entities (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -511,6 +521,7 @@ def preferences_for_user(user_id: int | None) -> UserPreferences:
     try:
         initialize_user_preferences(connection, user_id)
         settings_row = connection.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,)).fetchone()
+        ui_state_row = connection.execute("SELECT * FROM user_ui_state WHERE user_id = ?", (user_id,)).fetchone()
         follow_rows = connection.execute("SELECT * FROM user_follows WHERE user_id = ?", (user_id,)).fetchall()
         connection.commit()
     finally:
@@ -521,6 +532,11 @@ def preferences_for_user(user_id: int | None) -> UserPreferences:
         preferences.f1_sessions = {F1Session(item) for item in json.loads(settings_row["f1_sessions"])}
         preferences.default_hide_spoilers = bool(settings_row["default_hide_spoilers"])
         preferences.timezone = settings_row["timezone"]
+    if ui_state_row:
+        try:
+            preferences.ui_state = json.loads(ui_state_row["state_json"])
+        except json.JSONDecodeError:
+            preferences.ui_state = {}
     known_entities = list_entity_records()
     preferences.follows = {
         row["entity_id"]: Follow(
@@ -577,6 +593,41 @@ def set_user_f1_sessions(user_id: int, sessions: Iterable[F1Session]) -> None:
             WHERE user_id = ?
             """,
             (json.dumps([session.value for session in sessions]), utc_now().isoformat(), user_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def set_user_hide_spoilers(user_id: int, hide_spoilers: bool) -> None:
+    connection = connect()
+    try:
+        initialize_user_preferences(connection, user_id)
+        connection.execute(
+            """
+            UPDATE user_settings
+            SET default_hide_spoilers = ?, updated_at = ?
+            WHERE user_id = ?
+            """,
+            (int(hide_spoilers), utc_now().isoformat(), user_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def set_user_ui_state(user_id: int, state: dict) -> None:
+    connection = connect()
+    try:
+        connection.execute(
+            """
+            INSERT INTO user_ui_state (user_id, state_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                state_json = excluded.state_json,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, json.dumps(state), utc_now().isoformat()),
         )
         connection.commit()
     finally:

@@ -229,7 +229,7 @@ def provider_is_configured(provider: EventProvider) -> bool:
     if isinstance(provider, FootballDataProvider):
         return bool(provider.token)
     if isinstance(provider, ApiFootballProvider):
-        return bool(provider.token) and os.getenv("API_FOOTBALL_ENABLE") == "1"
+        return bool(provider.token)
     if isinstance(provider, TheSportsDBFootballProvider):
         return bool(provider.team_ids)
     if isinstance(provider, PandaScoreCS2Provider):

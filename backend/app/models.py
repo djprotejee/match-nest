@@ -95,6 +95,7 @@ class UserPreferences:
     )
     default_hide_spoilers: bool = True
     timezone: str = "Europe/Kyiv"
+    ui_state: dict = field(default_factory=dict)
 
     def follow_for(self, entity_id: str) -> Follow | None:
         return self.follows.get(entity_id)

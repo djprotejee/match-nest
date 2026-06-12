@@ -36,6 +36,7 @@ def should_show_event(
     statuses: set[EventStatus] | None = None,
     apply_f1_session_filter: bool = True,
 ) -> bool:
+    event.status = effective_event_status(event)
     # Visibility is resolved before date filtering because hidden entities should
     # never leak into timeline, calendar, widget, or notification payloads.
     level = visible_follow_level(event, preferences)
@@ -100,6 +101,7 @@ def _next_month(start: datetime) -> datetime:
 
 
 def serialize_event(event: Event, preferences: UserPreferences, reveal_spoilers: bool = False) -> dict:
+    event.status = effective_event_status(event)
     level = visible_follow_level(event, preferences)
     # Spoiler mode removes the result from API responses instead of only hiding
     # it in the UI. That keeps widgets and notifications spoiler-safe too.
@@ -128,6 +130,20 @@ def group_by_day(events: Iterable[Event], preferences: UserPreferences, reveal_s
             key = event.starts_at.astimezone(KYIV_TZ).date().isoformat()
         grouped[key].append(serialize_event(event, preferences, reveal_spoilers))
     return [{"date": key, "events": value} for key, value in sorted(grouped.items())]
+
+
+def effective_event_status(event: Event, now: datetime | None = None) -> EventStatus:
+    if event.starts_at is None:
+        return event.status
+    current = (now or datetime.now(KYIV_TZ)).astimezone(KYIV_TZ)
+    starts_at = event.starts_at.astimezone(KYIV_TZ)
+    if event.status == EventStatus.UPCOMING and starts_at <= current:
+        return EventStatus.DELAYED
+    if event.status == EventStatus.LIVE and current - starts_at > timedelta(hours=8):
+        return EventStatus.PAST
+    if event.status == EventStatus.DELAYED and current - starts_at > timedelta(days=2):
+        return EventStatus.PAST
+    return event.status
 
 
 def parse_enum_set(values: str | None, enum_type):

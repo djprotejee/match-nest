@@ -12,12 +12,13 @@ import {
   User,
   WifiOff,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   authToken,
   clearAuthToken,
   createCustomEntity,
   deleteEntity,
+  fetchAccountSettings,
   fetchEntityDetail,
   fetchCalendar,
   fetchCurrentUser,
@@ -29,6 +30,7 @@ import {
   logoutAccount,
   registerAccount,
   saveApiBaseUrl,
+  saveAccountSettings,
   saveAuthToken,
   saveF1Sessions,
   saveFollowLevel,
@@ -83,6 +85,11 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(Boolean(authToken()));
   const [authError, setAuthError] = useState<string | null>(null);
+  const [accountSettingsLoaded, setAccountSettingsLoaded] = useState(false);
+  const timelineRetryRef = useRef<number | null>(null);
+  const calendarRetryRef = useRef<number | null>(null);
+  const timelineRetriedKeyRef = useRef<string | null>(null);
+  const calendarRetriedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     const callbackToken = new URLSearchParams(window.location.search).get("auth_token");
@@ -113,16 +120,53 @@ export function App() {
   }, [state]);
 
   useEffect(() => {
-    if (currentUser) {
-      void loadTimeline();
+    if (!currentUser) {
+      setAccountSettingsLoaded(false);
+      return;
     }
-  }, [range, state.hideSpoilers, currentUser]);
+    setAccountSettingsLoaded(false);
+    fetchAccountSettings()
+      .then((settings) => {
+        setState((current) => mergeAccountSettings(current, settings));
+        syncViewSettings(settings.ui_state);
+        setLastError(null);
+      })
+      .catch((error) => {
+        setLastError(readErrorMessage(error));
+      })
+      .finally(() => setAccountSettingsLoaded(true));
+  }, [currentUser?.id]);
 
   useEffect(() => {
-    if (currentUser) {
+    if (!currentUser || !accountSettingsLoaded) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      void saveAccountSettings(accountSettingsPayload(state, {
+        range,
+        feedMode,
+        importanceMode,
+        sports: Array.from(sports),
+        timelineStatuses: Array.from(timelineStatuses),
+        calendarStatuses: Array.from(calendarStatuses),
+      })).catch((error) => {
+        setLastError(readErrorMessage(error));
+      });
+    }, 700);
+    return () => window.clearTimeout(timeout);
+  }, [state, range, feedMode, importanceMode, sports, timelineStatuses, calendarStatuses, currentUser, accountSettingsLoaded]);
+
+  useEffect(() => {
+    if (currentUser && accountSettingsLoaded) {
+      void loadTimeline();
+    }
+  }, [range, state.hideSpoilers, currentUser, accountSettingsLoaded]);
+
+  useEffect(() => {
+    if (currentUser && accountSettingsLoaded) {
       void loadCalendar();
     }
-  }, [monthCursor, state.hideSpoilers, currentUser]);
+  }, [monthCursor, state.hideSpoilers, currentUser, accountSettingsLoaded]);
 
   async function loadTimeline() {
     setLoading(true);
@@ -135,11 +179,15 @@ export function App() {
         setTimeline(nextTimeline);
       }
       setEntities(nextEntities);
+      syncFollowsFromEntities(nextEntities);
       setOffline(false);
       setCacheNote(null);
       setLastError(null);
       if (nextTimeline.length || timeline.length === 0) {
         localStorage.setItem(timelineCacheKey(range, state.hideSpoilers), JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
+      }
+      if (!nextTimeline.length) {
+        scheduleTimelineRetry();
       }
     } catch (error) {
       setLastError(readErrorMessage(error));
@@ -175,6 +223,9 @@ export function App() {
       if (nextGroups.length || !cached) {
         localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), groups: nextGroups }));
       }
+      if (!nextGroups.length) {
+        scheduleCalendarRetry();
+      }
     } catch {
       if (!cached) {
         setCalendarGroups(fallbackTimeline);
@@ -184,7 +235,9 @@ export function App() {
 
   async function loadEntitiesOnly() {
     try {
-      setEntities(await fetchEntities());
+      const nextEntities = await fetchEntities();
+      setEntities(nextEntities);
+      syncFollowsFromEntities(nextEntities);
       setLastError(null);
     } catch (error) {
       setLastError(readErrorMessage(error));
@@ -231,6 +284,56 @@ export function App() {
     setState((current) => ({ ...current, ...patch }));
   }
 
+  function syncViewSettings(uiState: Record<string, unknown>) {
+    if (isRangeFilter(uiState.range)) {
+      setRange(uiState.range);
+    }
+    if (isFeedMode(uiState.feedMode)) {
+      setFeedMode(uiState.feedMode);
+    }
+    if (isImportanceMode(uiState.importanceMode)) {
+      setImportanceMode(uiState.importanceMode);
+    }
+    if (Array.isArray(uiState.sports)) {
+      setSports(new Set(uiState.sports.filter(isSport)));
+    }
+    if (Array.isArray(uiState.timelineStatuses)) {
+      setTimelineStatuses(new Set(uiState.timelineStatuses.filter(isEventStatus)));
+    }
+    if (Array.isArray(uiState.calendarStatuses)) {
+      setCalendarStatuses(new Set(uiState.calendarStatuses.filter(isEventStatus)));
+    }
+  }
+
+  function syncFollowsFromEntities(nextEntities: EntityItem[]) {
+    const follows = followsFromEntities(nextEntities);
+    setState((current) => ({ ...current, follows }));
+  }
+
+  function scheduleTimelineRetry() {
+    const retryKey = timelineCacheKey(range, state.hideSpoilers);
+    if (timelineRetryRef.current !== null || timelineRetriedKeyRef.current === retryKey) {
+      return;
+    }
+    timelineRetriedKeyRef.current = retryKey;
+    timelineRetryRef.current = window.setTimeout(() => {
+      timelineRetryRef.current = null;
+      void loadTimeline();
+    }, 3500);
+  }
+
+  function scheduleCalendarRetry() {
+    const retryKey = calendarCacheKey(monthCursor.getFullYear(), monthCursor.getMonth() + 1);
+    if (calendarRetryRef.current !== null || calendarRetriedKeyRef.current === retryKey) {
+      return;
+    }
+    calendarRetriedKeyRef.current = retryKey;
+    calendarRetryRef.current = window.setTimeout(() => {
+      calendarRetryRef.current = null;
+      void loadCalendar();
+    }, 3500);
+  }
+
   function setFollow(entityId: string, level: FollowLevel) {
     updateState({ follows: { ...state.follows, [entityId]: level } });
     void saveFollowLevel(entityId, level)
@@ -272,8 +375,8 @@ export function App() {
     saveAuthToken(token);
     setCurrentUser(user);
     setAuthError(null);
+    setAccountSettingsLoaded(false);
     updateState({ follows: {} });
-    await Promise.all([loadTimeline(), loadCalendar()]);
   }
 
   async function handleLogout() {
@@ -1743,6 +1846,81 @@ function timelineCacheKey(range: RangeFilter, hideSpoilers: boolean): string {
 
 function calendarCacheKey(year: number, month: number): string {
   return `${CALENDAR_CACHE_PREFIX}${year}-${String(month).padStart(2, "0")}`;
+}
+
+function mergeAccountSettings(current: AppState, settings: {
+  f1_sessions: string[];
+  hide_spoilers: boolean;
+  ui_state: Record<string, unknown>;
+}): AppState {
+  const uiState = settings.ui_state as Partial<AppState>;
+  return {
+    ...current,
+    ...uiState,
+    follows: current.follows,
+    apiUrl: current.apiUrl,
+    f1Sessions: f1SessionsRecord(settings.f1_sessions),
+    hideSpoilers: settings.hide_spoilers,
+  };
+}
+
+function accountSettingsPayload(state: AppState, viewState: {
+  range: RangeFilter;
+  feedMode: FeedMode;
+  importanceMode: ImportanceMode;
+  sports: Sport[];
+  timelineStatuses: EventStatus[];
+  calendarStatuses: EventStatus[];
+}): {
+  f1_sessions: string[];
+  hide_spoilers: boolean;
+  ui_state: Record<string, unknown>;
+} {
+  const { follows: _follows, apiUrl: _apiUrl, ...uiState } = state;
+  return {
+    f1_sessions: Object.entries(state.f1Sessions).filter(([, value]) => value).map(([key]) => key),
+    hide_spoilers: state.hideSpoilers,
+    ui_state: { ...uiState, ...viewState },
+  };
+}
+
+function f1SessionsRecord(sessions: string[]): Record<string, boolean> {
+  return {
+    race: sessions.includes("race"),
+    qualifying: sessions.includes("qualifying"),
+    sprint: sessions.includes("sprint"),
+    practice: sessions.includes("practice"),
+  };
+}
+
+function followsFromEntities(entities: EntityItem[]): Record<string, FollowLevel> {
+  const follows: Record<string, FollowLevel> = {};
+  for (const entity of entities) {
+    if (entity.follow !== "explore") {
+      follows[entity.id] = entity.follow;
+    }
+  }
+  return follows;
+}
+
+function isRangeFilter(value: unknown): value is RangeFilter {
+  return value === "today" || value === "week" || value === "month";
+}
+
+function isFeedMode(value: unknown): value is FeedMode {
+  return value === "main" || value === "starred" || value === "all";
+}
+
+function isImportanceMode(value: unknown): value is ImportanceMode {
+  return value === "all" || value === "main" || value === "significant";
+}
+
+function isSport(value: unknown): value is Sport {
+  return value === "formula" || value === "cs2" || value === "football";
+}
+
+function isEventStatus(value: unknown): value is EventStatus {
+  return value === "past" || value === "live" || value === "delayed" || value === "upcoming" || value === "tbd";
 }
 
 function loadCachedCalendar(key: string): DayGroup[] | null {

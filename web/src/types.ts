@@ -90,3 +90,9 @@ export interface RegisterResponse {
   email_delivery: { delivery: string; path: string | null };
   verification_url?: string;
 }
+
+export interface AccountSettings {
+  f1_sessions: string[];
+  hide_spoilers: boolean;
+  ui_state: Record<string, unknown>;
+}
