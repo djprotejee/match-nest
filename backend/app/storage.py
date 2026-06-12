@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
 
-from .models import Entity, EntityBinding, EntityKind, EntityRecord, Event, EventStatus, F1Session, Follow, FollowLevel, Sport, UserAccount, UserPreferences
+from .models import Entity, EntityBinding, EntityKind, EntityRecord, Event, EventStatus, F1Session, Follow, FollowLevel, NotificationRule, PushSubscription, Sport, UserAccount, UserPreferences
 from .seed import DEFAULT_PREFERENCES, ENTITIES
 
 try:
@@ -253,6 +253,53 @@ def init_db(connection: sqlite3.Connection | PostgresConnection) -> None:
             user_id INTEGER PRIMARY KEY,
             state_json TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_agent TEXT,
+            enabled INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_id ON push_subscriptions(user_id)")
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notification_rules (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            minutes_before INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_notification_rules_user_id ON notification_rules(user_id)")
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sent_notifications (
+            user_id INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            rule_id TEXT NOT NULL,
+            scheduled_for TEXT NOT NULL,
+            sent_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, event_id, rule_id, scheduled_for),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
         """
@@ -628,6 +675,183 @@ def set_user_ui_state(user_id: int, state: dict) -> None:
                 updated_at = excluded.updated_at
             """,
             (user_id, json.dumps(state), utc_now().isoformat()),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def upsert_push_subscription(
+    user_id: int,
+    endpoint: str,
+    p256dh: str,
+    auth: str,
+    user_agent: str | None = None,
+) -> PushSubscription:
+    subscription_id = "push_" + secrets.token_urlsafe(18)
+    now = utc_now().isoformat()
+    connection = connect()
+    try:
+        connection.execute(
+            """
+            INSERT INTO push_subscriptions (
+                id, user_id, endpoint, p256dh, auth, user_agent, enabled, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(endpoint) DO UPDATE SET
+                user_id = excluded.user_id,
+                p256dh = excluded.p256dh,
+                auth = excluded.auth,
+                user_agent = excluded.user_agent,
+                enabled = 1,
+                updated_at = excluded.updated_at
+            """,
+            (subscription_id, user_id, endpoint, p256dh, auth, user_agent, now, now),
+        )
+        connection.commit()
+        row = connection.execute("SELECT * FROM push_subscriptions WHERE endpoint = ?", (endpoint,)).fetchone()
+    finally:
+        connection.close()
+    if row is None:
+        raise RuntimeError("Push subscription could not be stored.")
+    return push_subscription_from_row(row)
+
+
+def list_push_subscriptions(user_id: int | None = None, enabled_only: bool = True) -> list[PushSubscription]:
+    clauses = []
+    params: list[object] = []
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    if enabled_only:
+        clauses.append("enabled = 1")
+    sql = "SELECT * FROM push_subscriptions"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY updated_at DESC"
+    connection = connect()
+    try:
+        rows = connection.execute(sql, params).fetchall()
+    finally:
+        connection.close()
+    return [push_subscription_from_row(row) for row in rows]
+
+
+def disable_push_subscription(endpoint: str) -> None:
+    connection = connect()
+    try:
+        connection.execute(
+            "UPDATE push_subscriptions SET enabled = 0, updated_at = ? WHERE endpoint = ?",
+            (utc_now().isoformat(), endpoint),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def list_notification_rules(user_id: int) -> list[NotificationRule]:
+    connection = connect()
+    try:
+        rows = connection.execute(
+            "SELECT * FROM notification_rules WHERE user_id = ? ORDER BY target_type, name",
+            (user_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [notification_rule_from_row(row) for row in rows]
+
+
+def upsert_notification_rule(
+    user_id: int,
+    name: str,
+    target_type: str,
+    target_id: str,
+    minutes_before: int,
+    enabled: bool = True,
+    rule_id: str | None = None,
+) -> NotificationRule:
+    now = utc_now().isoformat()
+    next_id = rule_id or "rule_" + secrets.token_urlsafe(18)
+    minutes = max(0, min(int(minutes_before), 7 * 24 * 60))
+    connection = connect()
+    try:
+        connection.execute(
+            """
+            INSERT INTO notification_rules (
+                id, user_id, name, enabled, target_type, target_id, minutes_before, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                enabled = excluded.enabled,
+                target_type = excluded.target_type,
+                target_id = excluded.target_id,
+                minutes_before = excluded.minutes_before,
+                updated_at = excluded.updated_at
+            """,
+            (next_id, user_id, name.strip() or "Reminder", int(enabled), target_type, target_id, minutes, now, now),
+        )
+        connection.commit()
+        row = connection.execute("SELECT * FROM notification_rules WHERE id = ? AND user_id = ?", (next_id, user_id)).fetchone()
+    finally:
+        connection.close()
+    if row is None:
+        raise RuntimeError("Notification rule could not be stored.")
+    return notification_rule_from_row(row)
+
+
+def delete_notification_rule(user_id: int, rule_id: str) -> None:
+    connection = connect()
+    try:
+        connection.execute("DELETE FROM notification_rules WHERE user_id = ? AND id = ?", (user_id, rule_id))
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def list_all_notification_rules(enabled_only: bool = True) -> list[NotificationRule]:
+    sql = "SELECT * FROM notification_rules"
+    if enabled_only:
+        sql += " WHERE enabled = 1"
+    sql += " ORDER BY minutes_before DESC"
+    connection = connect()
+    try:
+        rows = connection.execute(sql).fetchall()
+    finally:
+        connection.close()
+    return [notification_rule_from_row(row) for row in rows]
+
+
+def sent_notification_exists(user_id: int, event_id: str, rule_id: str, scheduled_for: datetime) -> bool:
+    connection = connect()
+    try:
+        row = connection.execute(
+            """
+            SELECT 1 FROM sent_notifications
+            WHERE user_id = ? AND event_id = ? AND rule_id = ? AND scheduled_for = ?
+            """,
+            (user_id, event_id, rule_id, scheduled_for.astimezone(timezone.utc).isoformat()),
+        ).fetchone()
+    finally:
+        connection.close()
+    return row is not None
+
+
+def mark_notification_sent(user_id: int, event_id: str, rule_id: str, scheduled_for: datetime) -> None:
+    connection = connect()
+    try:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO sent_notifications (user_id, event_id, rule_id, scheduled_for, sent_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                event_id,
+                rule_id,
+                scheduled_for.astimezone(timezone.utc).isoformat(),
+                utc_now().isoformat(),
+            ),
         )
         connection.commit()
     finally:
@@ -1101,6 +1325,34 @@ def user_from_row(row: sqlite3.Row) -> UserAccount:
         email=row["email"],
         email_verified_at=datetime.fromisoformat(verified_at).astimezone(timezone.utc) if verified_at else None,
         created_at=datetime.fromisoformat(row["created_at"]).astimezone(timezone.utc),
+    )
+
+
+def push_subscription_from_row(row) -> PushSubscription:
+    return PushSubscription(
+        id=row["id"],
+        user_id=int(row["user_id"]),
+        endpoint=row["endpoint"],
+        p256dh=row["p256dh"],
+        auth=row["auth"],
+        user_agent=row["user_agent"],
+        enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]).astimezone(timezone.utc),
+        updated_at=datetime.fromisoformat(row["updated_at"]).astimezone(timezone.utc),
+    )
+
+
+def notification_rule_from_row(row) -> NotificationRule:
+    return NotificationRule(
+        id=row["id"],
+        user_id=int(row["user_id"]),
+        name=row["name"],
+        enabled=bool(row["enabled"]),
+        target_type=row["target_type"],
+        target_id=row["target_id"],
+        minutes_before=int(row["minutes_before"]),
+        created_at=datetime.fromisoformat(row["created_at"]).astimezone(timezone.utc),
+        updated_at=datetime.fromisoformat(row["updated_at"]).astimezone(timezone.utc),
     )
 
 

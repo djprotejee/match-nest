@@ -18,6 +18,7 @@ import {
   clearAuthToken,
   createCustomEntity,
   deleteEntity,
+  deleteNotificationRule,
   fetchAccountSettings,
   fetchEntityDetail,
   fetchCalendar,
@@ -25,6 +26,7 @@ import {
   fetchEntities,
   fetchEventDetails,
   fetchGoogleLoginUrl,
+  fetchNotificationSettings,
   fetchTimeline,
   loginAccount,
   logoutAccount,
@@ -34,6 +36,8 @@ import {
   saveAuthToken,
   saveF1Sessions,
   saveFollowLevel,
+  saveNotificationRule,
+  savePushSubscription,
   searchEntities,
   updateEntity,
   verifyEmailToken,
@@ -63,7 +67,7 @@ import {
 } from "./dateUtils";
 import { fallbackEntities, fallbackTimeline } from "./demoData";
 import { appendManualPins, filterGroups, findConflicts, flattenGroups, followLevelsForFeedMode, mergeFollowOverrides } from "./eventFilters";
-import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, EventStatus, FollowLevel, MatchEvent, RangeFilter, RegisterResponse, Sport } from "./types";
+import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, EventStatus, FollowLevel, MatchEvent, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport } from "./types";
 
 type Tab = "timeline" | "calendar" | "explore" | "settings";
 
@@ -589,6 +593,8 @@ export function App() {
         <SettingsScreen
           state={state}
           setState={updateState}
+          entities={allEntities}
+          categories={state.categories}
           currentUser={currentUser}
           onLogout={handleLogout}
           setF1Session={setF1Session}
@@ -1481,6 +1487,8 @@ function EntityDrawer({
 function SettingsScreen(props: {
   state: AppState;
   setState: (patch: Partial<AppState>) => void;
+  entities: EntityItem[];
+  categories: FollowCategory[];
   currentUser: AuthUser;
   onLogout: () => Promise<void>;
   setF1Session: (session: string, enabled: boolean) => void;
@@ -1539,22 +1547,212 @@ function SettingsScreen(props: {
 
       <section className="settings-card">
         <h3>Notifications</h3>
-        {Object.entries(props.state.notify).map(([preset, enabled]) => (
-          <ToggleRow
-            key={preset}
-            label={notifyLabel(preset as NotifyPreset)}
-            enabled={enabled}
-            onChange={(value) =>
-              props.setState({
-                notify: { ...props.state.notify, [preset]: value },
-              })
-            }
-          />
-        ))}
+        <NotificationSettingsPanel entities={props.entities} categories={props.categories} />
       </section>
 
       <ManualPinForm onAdd={props.addManualPin} />
     </main>
+  );
+}
+
+function NotificationSettingsPanel({ entities, categories }: { entities: EntityItem[]; categories: FollowCategory[] }) {
+  const [settings, setSettings] = useState<NotificationSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [targetType, setTargetType] = useState<NotificationRule["target_type"]>("sport");
+  const [sportTarget, setSportTarget] = useState<Sport>("football");
+  const [categoryTarget, setCategoryTarget] = useState<FollowLevel>("main");
+  const [entityTarget, setEntityTarget] = useState("");
+  const [minutesBefore, setMinutesBefore] = useState(10);
+  const [ruleName, setRuleName] = useState("");
+
+  useEffect(() => {
+    void refreshNotificationSettings();
+  }, []);
+
+  async function refreshNotificationSettings() {
+    try {
+      setSettings(await fetchNotificationSettings());
+      setError(null);
+    } catch (requestError) {
+      setError(readErrorMessage(requestError));
+    }
+  }
+
+  async function enablePush() {
+    setBusy(true);
+    try {
+      const currentSettings = settings || (await fetchNotificationSettings());
+      if (!currentSettings.push.configured) {
+        throw new Error(`Push is not configured: ${currentSettings.push.missing.join(", ")}`);
+      }
+      if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+        throw new Error("Push notifications are not supported in this browser.");
+      }
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        throw new Error("Notification permission was not granted.");
+      }
+      const registration = await navigator.serviceWorker.ready;
+      const existing = await registration.pushManager.getSubscription();
+      const subscription =
+        existing ||
+        (await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToArrayBuffer(currentSettings.push.public_key),
+        }));
+      await savePushSubscription(subscription);
+      await refreshNotificationSettings();
+      setError(null);
+    } catch (requestError) {
+      setError(readErrorMessage(requestError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addRule() {
+    const targetId = selectedNotificationTargetId(targetType, sportTarget, categoryTarget, entityTarget, entities);
+    if (!targetId) {
+      setError("Select notification target.");
+      return;
+    }
+    const name = ruleName.trim() || `${notificationTargetLabel(targetType, targetId, entities, categories)} - ${minutesBefore} min`;
+    setBusy(true);
+    try {
+      await saveNotificationRule({
+        name,
+        enabled: true,
+        target_type: targetType,
+        target_id: targetId,
+        minutes_before: minutesBefore,
+      });
+      setRuleName("");
+      await refreshNotificationSettings();
+      setError(null);
+    } catch (requestError) {
+      setError(readErrorMessage(requestError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateRule(rule: NotificationRule, patch: Partial<NotificationRule>) {
+    setBusy(true);
+    try {
+      await saveNotificationRule({
+        id: rule.id,
+        name: patch.name ?? rule.name,
+        enabled: patch.enabled ?? rule.enabled,
+        target_type: patch.target_type ?? rule.target_type,
+        target_id: patch.target_id ?? rule.target_id,
+        minutes_before: patch.minutes_before ?? rule.minutes_before,
+      });
+      await refreshNotificationSettings();
+      setError(null);
+    } catch (requestError) {
+      setError(readErrorMessage(requestError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeRule(ruleId: string) {
+    setBusy(true);
+    try {
+      await deleteNotificationRule(ruleId);
+      await refreshNotificationSettings();
+      setError(null);
+    } catch (requestError) {
+      setError(readErrorMessage(requestError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const subscriptions = settings?.subscriptions.filter((subscription) => subscription.enabled) || [];
+
+  return (
+    <div className="notification-panel">
+      <div className="notification-status">
+        <span>{settings?.push.configured ? "Push configured" : "Push not configured"}</span>
+        <strong>{subscriptions.length ? `${subscriptions.length} device${subscriptions.length === 1 ? "" : "s"}` : "No device"}</strong>
+        <button className="secondary-action" type="button" onClick={() => void enablePush()} disabled={busy}>
+          Enable on this device
+        </button>
+      </div>
+
+      <div className="notification-rule-form">
+        <input value={ruleName} onChange={(event) => setRuleName(event.target.value)} placeholder="Rule name, optional" />
+        <div className="filter-grid">
+          <select value={targetType} onChange={(event) => setTargetType(event.target.value as NotificationRule["target_type"])}>
+            <option value="sport">Sport</option>
+            <option value="category">Category</option>
+            <option value="entity">Team / tournament / driver</option>
+          </select>
+          {targetType === "sport" ? (
+            <select value={sportTarget} onChange={(event) => setSportTarget(event.target.value as Sport)}>
+              {SPORTS.map((sport) => (
+                <option key={sport} value={sport}>
+                  {sportLabel(sport)}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {targetType === "category" ? (
+            <select value={categoryTarget} onChange={(event) => setCategoryTarget(event.target.value)}>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {targetType === "entity" ? (
+            <select value={entityTarget} onChange={(event) => setEntityTarget(event.target.value)}>
+              <option value="">Select entity</option>
+              {entities.map((entity) => (
+                <option key={entity.id} value={entity.id}>
+                  {entity.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          <input
+            type="number"
+            min="0"
+            max="10080"
+            value={minutesBefore}
+            onChange={(event) => setMinutesBefore(Number(event.target.value))}
+            aria-label="Minutes before event"
+          />
+        </div>
+        <button className="primary-action" type="button" onClick={() => void addRule()} disabled={busy}>
+          <Plus size={16} />
+          Add notification rule
+        </button>
+      </div>
+
+      {error ? <div className="inline-error">{error}</div> : null}
+
+      <div className="notification-rule-list">
+        {(settings?.rules || []).map((rule) => (
+          <article className="notification-rule" key={rule.id}>
+            <div>
+              <strong>{rule.name}</strong>
+              <span>
+                {notificationTargetLabel(rule.target_type, rule.target_id, entities, categories)} - {rule.minutes_before} min before
+              </span>
+            </div>
+            <ToggleRow label={rule.enabled ? "On" : "Off"} enabled={rule.enabled} onChange={(enabled) => void updateRule(rule, { enabled })} />
+            <button className="text-action danger" type="button" onClick={() => void removeRule(rule.id)} disabled={busy}>
+              Delete
+            </button>
+          </article>
+        ))}
+        {settings && !settings.rules.length ? <div className="empty-state compact">No notification rules yet.</div> : null}
+      </div>
+    </div>
   );
 }
 
@@ -2257,6 +2455,51 @@ function kindLabel(kind: string): string {
 
 function sportLabel(sport: Sport): string {
   return sport === "formula" ? "F1" : sport === "cs2" ? "CS2" : "Football";
+}
+
+function selectedNotificationTargetId(
+  targetType: NotificationRule["target_type"],
+  sportTarget: Sport,
+  categoryTarget: FollowLevel,
+  entityTarget: string,
+  entities: EntityItem[],
+): string {
+  if (targetType === "sport") {
+    return sportTarget;
+  }
+  if (targetType === "category") {
+    return categoryTarget;
+  }
+  if (targetType === "entity") {
+    return entities.some((entity) => entity.id === entityTarget) ? entityTarget : "";
+  }
+  return "";
+}
+
+function notificationTargetLabel(
+  targetType: NotificationRule["target_type"],
+  targetId: string,
+  entities: EntityItem[],
+  categories: FollowCategory[],
+): string {
+  if (targetType === "sport") {
+    return sportLabel(targetId as Sport);
+  }
+  if (targetType === "category") {
+    return categoryForLevel(categories, targetId).name;
+  }
+  return entities.find((entity) => entity.id === targetId)?.name || targetId;
+}
+
+function urlBase64ToArrayBuffer(value: string): ArrayBuffer {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  const output = new Uint8Array(new ArrayBuffer(raw.length));
+  for (let index = 0; index < raw.length; index += 1) {
+    output[index] = raw.charCodeAt(index);
+  }
+  return output.buffer;
 }
 
 function defaultSportColor(sport: Sport): string {

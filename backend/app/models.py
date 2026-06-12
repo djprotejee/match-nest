@@ -114,6 +114,32 @@ class UserAccount:
 
 
 @dataclass(frozen=True)
+class PushSubscription:
+    id: str
+    user_id: int
+    endpoint: str
+    p256dh: str
+    auth: str
+    user_agent: str | None
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class NotificationRule:
+    id: str
+    user_id: int
+    name: str
+    enabled: bool
+    target_type: str
+    target_id: str
+    minutes_before: int
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class EntityBinding:
     provider: str
     binding_type: str

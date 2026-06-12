@@ -96,3 +96,31 @@ export interface AccountSettings {
   hide_spoilers: boolean;
   ui_state: Record<string, unknown>;
 }
+
+export interface NotificationRule {
+  id: string;
+  user_id: number;
+  name: string;
+  enabled: boolean;
+  target_type: "sport" | "category" | "entity";
+  target_id: string;
+  minutes_before: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationSettings {
+  push: {
+    configured: boolean;
+    public_key: string;
+    missing: string[];
+  };
+  subscriptions: Array<{
+    id: string;
+    endpoint: string;
+    enabled: boolean;
+    user_agent: string | null;
+    updated_at: string;
+  }>;
+  rules: NotificationRule[];
+}

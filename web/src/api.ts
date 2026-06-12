@@ -1,4 +1,4 @@
-import type { AccountSettings, AuthResponse, AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, FollowLevel, RangeFilter, RegisterResponse, Sport } from "./types";
+import type { AccountSettings, AuthResponse, AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, FollowLevel, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport } from "./types";
 
 const DEFAULT_API_URL = import.meta.env.DEV ? `${window.location.origin}/api/` : `${window.location.origin}/`;
 const AUTH_TOKEN_KEY = "matchnest.auth.token";
@@ -178,6 +178,37 @@ export async function saveF1Sessions(sessions: string[]): Promise<void> {
   });
 }
 
+export async function fetchNotificationSettings(): Promise<NotificationSettings> {
+  return getJson<NotificationSettings>(apiUrl("notifications"));
+}
+
+export async function saveNotificationRule(input: {
+  id?: string;
+  name: string;
+  enabled: boolean;
+  target_type: "sport" | "category" | "entity";
+  target_id: string;
+  minutes_before: number;
+}): Promise<NotificationRule> {
+  const response = await postJson<{ ok: boolean; rule: NotificationRule }>("notifications/rules", input, "PUT");
+  return response.rule;
+}
+
+export async function deleteNotificationRule(ruleId: string): Promise<void> {
+  const response = await fetch(apiUrl(`notifications/rules/${ruleId}`), {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`API request failed: ${response.status}`);
+  }
+}
+
+export async function savePushSubscription(subscription: PushSubscription): Promise<void> {
+  const payload = subscription.toJSON();
+  await postJson("notifications/subscriptions", payload);
+}
+
 function apiUrl(path: string): URL {
   return new URL(path.replace(/^\//, ""), normalizeApiBaseUrl(apiBaseUrl()));
 }
@@ -190,9 +221,9 @@ async function getJson<T>(url: URL): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function postJson<T>(path: string, body: unknown): Promise<T> {
+async function postJson<T>(path: string, body: unknown, method = "POST"): Promise<T> {
   const response = await fetch(apiUrl(path), {
-    method: "POST",
+    method,
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });

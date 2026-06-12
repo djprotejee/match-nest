@@ -31,3 +31,39 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
+self.addEventListener("push", (event) => {
+  let payload = {};
+  if (event.data) {
+    try {
+      payload = event.data.json();
+    } catch {
+      payload = { title: "MatchNest", body: event.data.text() };
+    }
+  }
+
+  const title = payload.title || "MatchNest reminder";
+  const options = {
+    body: payload.body || "Upcoming event",
+    tag: payload.tag || "matchnest-event",
+    data: { url: payload.url || "/" },
+    icon: "/icons/icon.svg",
+    badge: "/icons/icon.svg",
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ("focus" in client) {
+          client.navigate(url);
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(url);
+    }),
+  );
+});

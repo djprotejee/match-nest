@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 from .emailer import send_verification_email
 from .entity_service import default_entity_color, entity_bindings_from_payload, entity_payload, provider_search_candidates
 from .models import EntityKind, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserAccount
+from .notifications import dispatch_due_notifications, notification_settings_payload, push_config, rule_payload
 from .providers.registry import fetch_event_details, fetch_events, provider_results
 from .service import (
     filter_events,
@@ -47,6 +49,9 @@ from .storage import (
     set_user_follow,
     set_user_hide_spoilers,
     set_user_ui_state,
+    upsert_notification_rule,
+    upsert_push_subscription,
+    delete_notification_rule,
     update_custom_entity,
     user_for_session,
     verify_email,
@@ -61,6 +66,8 @@ def warm_default_calendar_cache_on_startup() -> None:
     # so the first user navigation does not have to trigger every provider.
     thread = threading.Thread(target=warm_default_calendar_cache, daemon=True)
     thread.start()
+    notification_thread = threading.Thread(target=notification_dispatch_loop, daemon=True)
+    notification_thread.start()
 
 
 def warm_default_calendar_cache() -> None:
@@ -77,6 +84,15 @@ def warm_default_calendar_cache() -> None:
     except Exception:
         # Cache warming is best-effort; request handlers still refresh on demand.
         return
+
+
+def notification_dispatch_loop() -> None:
+    while True:
+        try:
+            dispatch_due_notifications()
+        except Exception:
+            pass
+        time.sleep(60)
 
 app.add_middleware(
     CORSMiddleware,
@@ -146,6 +162,25 @@ class EntityUpdateRequest(BaseModel):
     color: str | None = None
     aliases: list[str] = []
     bindings: list[EntityBindingPayload] = []
+
+
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushSubscriptionRequest(BaseModel):
+    endpoint: str
+    keys: PushSubscriptionKeys
+
+
+class NotificationRuleRequest(BaseModel):
+    id: str | None = None
+    name: str
+    enabled: bool = True
+    target_type: str
+    target_id: str
+    minutes_before: int
 
 
 def optional_user(authorization: str | None = Header(default=None)) -> UserAccount | None:
@@ -424,6 +459,65 @@ def set_account_settings(update: AccountSettingsUpdate, current_user: UserAccoun
         "hide_spoilers": next_preferences.default_hide_spoilers,
         "ui_state": next_preferences.ui_state,
     }
+
+
+@app.get("/notifications")
+def notification_settings(current_user: UserAccount = Depends(require_user)) -> dict:
+    return notification_settings_payload(current_user.id)
+
+
+@app.post("/notifications/subscriptions")
+def save_push_subscription(
+    payload: PushSubscriptionRequest,
+    request: Request,
+    current_user: UserAccount = Depends(require_user),
+) -> dict:
+    if not payload.endpoint.strip():
+        raise HTTPException(status_code=400, detail="Push endpoint is required.")
+    subscription = upsert_push_subscription(
+        current_user.id,
+        endpoint=payload.endpoint,
+        p256dh=payload.keys.p256dh,
+        auth=payload.keys.auth,
+        user_agent=request.headers.get("user-agent"),
+    )
+    return {"ok": True, "subscription_id": subscription.id, "push": push_config()}
+
+
+@app.put("/notifications/rules")
+def save_notification_rule(payload: NotificationRuleRequest, current_user: UserAccount = Depends(require_user)) -> dict:
+    if payload.target_type not in {"sport", "category", "entity"}:
+        raise HTTPException(status_code=400, detail="target_type must be sport, category, or entity.")
+    if payload.minutes_before < 0:
+        raise HTTPException(status_code=400, detail="minutes_before must be zero or greater.")
+    rule = upsert_notification_rule(
+        current_user.id,
+        rule_id=payload.id,
+        name=payload.name,
+        enabled=payload.enabled,
+        target_type=payload.target_type,
+        target_id=payload.target_id,
+        minutes_before=payload.minutes_before,
+    )
+    return {"ok": True, "rule": rule_payload(rule)}
+
+
+@app.delete("/notifications/rules/{rule_id}")
+def remove_notification_rule(rule_id: str, current_user: UserAccount = Depends(require_user)) -> dict:
+    delete_notification_rule(current_user.id, rule_id)
+    return {"ok": True}
+
+
+@app.post("/notifications/dispatch")
+def run_notifications(
+    current_user: UserAccount = Depends(require_user),
+    x_notification_dispatch_token: str | None = Header(default=None),
+) -> dict:
+    # Manual trigger is useful on free hosting where the service may sleep.
+    expected_token = os.getenv("NOTIFICATION_DISPATCH_TOKEN", "").strip()
+    if expected_token and x_notification_dispatch_token != expected_token:
+        raise HTTPException(status_code=403, detail="Invalid notification dispatch token.")
+    return dispatch_due_notifications()
 
 
 @app.post("/auth/register")
