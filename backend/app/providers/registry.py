@@ -21,7 +21,16 @@ from .thesportsdb import TheSportsDBFootballProvider
 from .pandascore import PandaScoreCS2Provider
 from ..models import EntityKind, Event, EventStatus, F1Session, FollowLevel, Sport, UserPreferences
 from ..seed import DEFAULT_PREFERENCES, demo_events
-from ..storage import get_event, list_entity_records, list_events, mark_provider_fetch, provider_bindings_for, provider_fetch_state, upsert_events
+from ..storage import (
+    delete_stale_events_for_source,
+    get_event,
+    list_entity_records,
+    list_events,
+    mark_provider_fetch,
+    provider_bindings_for,
+    provider_fetch_state,
+    upsert_events,
+)
 
 INACTIVE_LEVELS = {FollowLevel.HIDDEN.value, FollowLevel.MUTED.value, FollowLevel.EXPLORE.value}
 
@@ -180,6 +189,7 @@ def refresh_provider(
     try:
         provider_events = provider.fetch(start=start, end=end)
         upsert_events(provider_events)
+        delete_stale_events_for_source(provider.source, start, end, [event.id for event in provider_events])
         mark_provider_fetch(provider_name, cache_key, "ok")
         _CACHE.pop(cache_key, None)
         return provider_events

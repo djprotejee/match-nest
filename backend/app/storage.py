@@ -1087,6 +1087,44 @@ def upsert_events(events: Iterable[Event]) -> None:
         connection.close()
 
 
+def delete_stale_events_for_source(
+    source: str,
+    start: datetime | None,
+    end: datetime | None,
+    keep_ids: Iterable[str],
+) -> None:
+    """Remove provider events that disappeared from a successful refresh.
+
+    Provider payloads can change shape over time. Without cleanup, old aggregate
+    IDs stay in the database next to newer split events, which is especially
+    visible for calendar-like providers such as F4 weekends.
+    """
+
+    ids = list(dict.fromkeys(keep_ids))
+    if not ids:
+        return
+
+    clauses = ["source = ?"]
+    params: list[str] = [source]
+    if start is not None:
+        clauses.append("(starts_at IS NULL OR starts_at >= ?)")
+        params.append(start.astimezone(timezone.utc).isoformat())
+    if end is not None:
+        clauses.append("(starts_at IS NULL OR starts_at < ?)")
+        params.append(end.astimezone(timezone.utc).isoformat())
+
+    placeholders = ", ".join("?" for _ in ids)
+    clauses.append(f"id NOT IN ({placeholders})")
+    params.extend(ids)
+
+    connection = connect()
+    try:
+        connection.execute(f"DELETE FROM events WHERE {' AND '.join(clauses)}", tuple(params))
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def list_events(start: datetime | None = None, end: datetime | None = None) -> list[Event]:
     clauses = []
     params: list[str] = []

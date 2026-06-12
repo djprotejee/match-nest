@@ -12,6 +12,7 @@ from app.storage import (
     create_session,
     create_custom_entity,
     create_user,
+    delete_stale_events_for_source,
     delete_or_hide_entity_for_user,
     get_entity_record,
     list_events,
@@ -71,6 +72,53 @@ class StorageTests(unittest.TestCase):
 
                 self.assertIsNotNone(state)
                 self.assertEqual(state.status, "error")
+
+    def test_delete_stale_events_for_source_keeps_current_provider_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
+                old_event = Event(
+                    id="f4-italian-2026-monza",
+                    title="Italian F4 - Monza",
+                    sport=Sport.FORMULA,
+                    starts_at=datetime(2026, 6, 19, 10, 0, tzinfo=timezone.utc),
+                    status=EventStatus.UPCOMING,
+                    entity_ids=["bondarev", "italian_f4"],
+                    source="f4-calendar",
+                    competition="Italian F4 Championship",
+                )
+                current_event = Event(
+                    id="f4-italian-2026-monza-day-1",
+                    title="Italian F4 - Monza Day 1",
+                    sport=Sport.FORMULA,
+                    starts_at=datetime(2026, 6, 19, 10, 0, tzinfo=timezone.utc),
+                    status=EventStatus.UPCOMING,
+                    entity_ids=["bondarev", "italian_f4"],
+                    source="f4-calendar",
+                    competition="Italian F4 Championship",
+                )
+                other_source_event = Event(
+                    id="f1-2026-9-race",
+                    title="Canadian Grand Prix",
+                    sport=Sport.FORMULA,
+                    starts_at=datetime(2026, 6, 19, 12, 0, tzinfo=timezone.utc),
+                    status=EventStatus.UPCOMING,
+                    entity_ids=["f1"],
+                    source="jolpica",
+                    competition="Formula 1",
+                )
+
+                upsert_events([old_event, current_event, other_source_event])
+                delete_stale_events_for_source(
+                    "f4-calendar",
+                    datetime(2026, 6, 1, tzinfo=timezone.utc),
+                    datetime(2026, 7, 1, tzinfo=timezone.utc),
+                    ["f4-italian-2026-monza-day-1"],
+                )
+
+                ids = {event.id for event in list_events()}
+                self.assertNotIn("f4-italian-2026-monza", ids)
+                self.assertIn("f4-italian-2026-monza-day-1", ids)
+                self.assertIn("f1-2026-9-race", ids)
 
     def test_user_registration_verification_and_session(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
