@@ -235,6 +235,38 @@ h2 {
   background: #ff8a3d;
 }
 
+.category-checklist {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+  gap: 8px;
+}
+
+.category-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid #303545;
+  border-radius: 8px;
+  background: #1b1e26;
+  color: #e8eaf0;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.category-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #ff8a3d;
+}
+
+.category-check span {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+
 .spoiler-toggle,
 .settings-toggle {
   display: flex;
@@ -844,6 +876,34 @@ h2 {
   color: #ff8a3d;
 }
 
+.category-manager {
+  gap: 12px;
+}
+
+.category-editor-list {
+  display: grid;
+  gap: 8px;
+}
+
+.category-editor-row,
+.category-create-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.category-create-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.category-lock {
+  color: #9aa3b2;
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
 .explore-tools,
 .entity-hub,
 .entity-category,
@@ -1398,6 +1458,18 @@ h2 {
 
   .filter-grid {
     grid-template-columns: 1fr;
+  }
+
+  .category-editor-row,
+  .category-create-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .category-editor-row .text-action,
+  .category-editor-row .category-lock,
+  .category-create-row .secondary-action {
+    grid-column: 2;
+    width: 100%;
   }
 
   .form-grid {

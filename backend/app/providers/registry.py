@@ -23,6 +23,8 @@ from ..models import EntityKind, Event, EventStatus, F1Session, FollowLevel, Spo
 from ..seed import DEFAULT_PREFERENCES, demo_events
 from ..storage import get_event, list_entity_records, list_events, mark_provider_fetch, provider_bindings_for, provider_fetch_state, upsert_events
 
+INACTIVE_LEVELS = {FollowLevel.HIDDEN.value, FollowLevel.MUTED.value, FollowLevel.EXPLORE.value}
+
 
 @dataclass
 class ProviderResult:
@@ -223,6 +225,8 @@ def fetch_event_details(event_id: str) -> dict | None:
     load_environment()
     if event_id.startswith("f1-"):
         return JolpicaF1Provider().details(event_id)
+    if event_id.startswith("f4-"):
+        return F4CalendarProvider().details(event_id)
     if event_id.startswith("cs2-"):
         return PandaScoreCS2Provider().details(event_id, get_event(event_id))
     return None
@@ -268,9 +272,9 @@ def range_cache_key(start: datetime | None, end: datetime | None, preferences: U
     follow_key = "default"
     if preferences:
         followed = sorted(
-            f"{entity_id}:{follow.level.value}"
+            f"{entity_id}:{follow_level_value(follow.level)}"
             for entity_id, follow in preferences.follows.items()
-            if follow.level in {FollowLevel.MAIN, FollowLevel.STARRED}
+            if is_active_follow_level(follow.level)
         )
         follow_key = "|".join(followed) or "none"
     return f"{start_key}:{end_key}:{follow_key}"
@@ -281,7 +285,7 @@ def followed_football_team_queries(preferences: UserPreferences) -> dict[str, li
     entities = list_entity_records()
     for entity_id, follow in preferences.follows.items():
         record = entities.get(entity_id)
-        if not record or follow.level not in {FollowLevel.MAIN, FollowLevel.STARRED}:
+        if not record or not is_active_follow_level(follow.level):
             continue
         entity = record.entity
         if entity.sport == Sport.FOOTBALL and entity.kind == EntityKind.TEAM:
@@ -303,7 +307,7 @@ def followed_espn_team_ids(preferences: UserPreferences) -> dict[str, set[str]]:
     espn_team_bindings = provider_bindings_for("espn", "team_id")
     for entity_id, follow in preferences.follows.items():
         record = entities.get(entity_id)
-        if not record or follow.level not in {FollowLevel.MAIN, FollowLevel.STARRED}:
+        if not record or not is_active_follow_level(follow.level):
             continue
         entity = record.entity
         if entity.sport == Sport.FOOTBALL and entity.kind == EntityKind.TEAM:
@@ -319,7 +323,7 @@ def followed_api_football_team_ids(preferences: UserPreferences) -> dict[str, in
     api_bindings = provider_bindings_for("api-football", "team_id")
     for entity_id, follow in preferences.follows.items():
         record = entities.get(entity_id)
-        if not record or follow.level not in {FollowLevel.MAIN, FollowLevel.STARRED}:
+        if not record or not is_active_follow_level(follow.level):
             continue
         if record.entity.sport == Sport.FOOTBALL and record.entity.kind == EntityKind.TEAM:
             values = api_bindings.get(entity_id) or []
@@ -334,7 +338,7 @@ def followed_espn_competitions(preferences: UserPreferences) -> dict[str, str]:
     espn_competition_bindings = provider_bindings_for("espn", "league_slug")
     for entity_id, follow in preferences.follows.items():
         record = entities.get(entity_id)
-        if not record or follow.level not in {FollowLevel.MAIN, FollowLevel.STARRED}:
+        if not record or not is_active_follow_level(follow.level):
             continue
         entity = record.entity
         if entity.sport == Sport.FOOTBALL and entity.kind == EntityKind.COMPETITION:
@@ -350,7 +354,7 @@ def followed_football_competitions(preferences: UserPreferences) -> dict[str, st
     football_data_bindings = provider_bindings_for("football-data", "competition_code")
     for entity_id, follow in preferences.follows.items():
         record = entities.get(entity_id)
-        if not record or follow.level not in {FollowLevel.MAIN, FollowLevel.STARRED}:
+        if not record or not is_active_follow_level(follow.level):
             continue
         entity = record.entity
         if entity.sport == Sport.FOOTBALL and entity.kind == EntityKind.COMPETITION:
@@ -367,6 +371,14 @@ def team_queries_for_entity_name(name: str) -> list[str]:
     if name.startswith("FC "):
         queries.append(name.removeprefix("FC "))
     return queries
+
+
+def follow_level_value(value) -> str:
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def is_active_follow_level(value) -> bool:
+    return follow_level_value(value) not in INACTIVE_LEVELS
 
 
 def events_cache_path(cache_key: str) -> Path:

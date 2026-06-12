@@ -1,6 +1,6 @@
 export type Sport = "formula" | "cs2" | "football";
 export type EventStatus = "past" | "live" | "delayed" | "upcoming" | "tbd";
-export type FollowLevel = "main" | "starred" | "muted" | "hidden" | "explore";
+export type FollowLevel = string;
 export type RangeFilter = "today" | "week" | "month";
 
 export interface MatchEvent {

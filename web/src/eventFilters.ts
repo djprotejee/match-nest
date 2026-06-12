@@ -2,20 +2,16 @@ import type { AppState, FeedMode, ImportanceMode } from "./appState";
 import { localDateKey } from "./dateUtils";
 import type { DayGroup, EntityItem, EventStatus, FollowLevel, MatchEvent, RangeFilter, Sport } from "./types";
 
-export function followLevelsForFeedMode(feedMode: FeedMode): FollowLevel[] {
+const INACTIVE_LEVELS = new Set<FollowLevel>(["hidden", "muted", "explore"]);
+
+export function followLevelsForFeedMode(feedMode: FeedMode, customFeedLevels: FollowLevel[] = []): FollowLevel[] {
   if (feedMode === "main") {
     return ["main"];
   }
-  if (feedMode === "starred_only") {
-    return ["starred"];
-  }
-  if (feedMode === "main_starred") {
+  if (feedMode === "starred") {
     return ["main", "starred"];
   }
-  if (feedMode === "starred_explore") {
-    return ["starred", "explore"];
-  }
-  return ["main", "starred", "explore", "muted"];
+  return customFeedLevels.length ? customFeedLevels : ["main", "starred"];
 }
 
 export function mergeFollowOverrides(entities: EntityItem[], follows: Record<string, FollowLevel>): EntityItem[] {
@@ -43,6 +39,7 @@ export function filterGroups(
     sports: Set<Sport>;
     statuses: Set<EventStatus>;
     feedMode: FeedMode;
+    customFeedLevels: FollowLevel[];
     importanceMode: ImportanceMode;
     state: AppState;
     entityMap: Map<string, EntityItem>;
@@ -85,6 +82,7 @@ function shouldShowEvent(
     sports: Set<Sport>;
     statuses: Set<EventStatus>;
     feedMode: FeedMode;
+    customFeedLevels: FollowLevel[];
     importanceMode: ImportanceMode;
     state: AppState;
   },
@@ -95,7 +93,7 @@ function shouldShowEvent(
   if (event.follow_level === "hidden") {
     return false;
   }
-  if (!followLevelsForFeedMode(options.feedMode).includes(event.follow_level)) {
+  if (!followLevelsForFeedMode(options.feedMode, options.customFeedLevels).includes(event.follow_level)) {
     return false;
   }
   if (options.importanceMode === "main" && event.follow_level !== "main") {
@@ -123,6 +121,10 @@ function applyLocalFollow(event: MatchEvent, entityMap: Map<string, EntityItem>)
   }
   if (levels.includes("starred")) {
     return { ...event, follow_level: "starred" };
+  }
+  const customLevel = levels.find((level) => !INACTIVE_LEVELS.has(level));
+  if (customLevel) {
+    return { ...event, follow_level: customLevel };
   }
   if (levels.includes("muted")) {
     return { ...event, follow_level: "muted" };

@@ -1,13 +1,22 @@
 import { apiBaseUrl } from "./api";
 import type { FollowLevel, MatchEvent } from "./types";
 
-export type FeedMode = "main" | "starred_only" | "main_starred" | "starred_explore" | "all";
+export type FeedMode = "main" | "starred" | "custom";
 export type ImportanceMode = "all" | "main" | "significant";
 export type WatchStatus = "none" | "will_watch" | "watching_live" | "watched" | "skip";
 export type NotifyPreset = "start" | "15m" | "1h" | "morning";
 
+export interface FollowCategory {
+  id: FollowLevel;
+  name: string;
+  color: string;
+  system?: boolean;
+}
+
 export interface AppState {
   follows: Record<string, FollowLevel>;
+  categories: FollowCategory[];
+  customFeedLevels: FollowLevel[];
   watch: Record<string, WatchStatus>;
   revealed: Record<string, boolean>;
   manualPins: MatchEvent[];
@@ -21,8 +30,18 @@ export const STORAGE_KEY = "matchnest.state.v2";
 export const CACHE_PREFIX = "matchnest.timeline.cache.v2.";
 export const CALENDAR_CACHE_PREFIX = "matchnest.calendar.cache.v1.";
 
+export const DEFAULT_CATEGORIES: FollowCategory[] = [
+  { id: "main", name: "Main", color: "#ff8a3d", system: true },
+  { id: "starred", name: "Starred", color: "#8b5cf6", system: true },
+  { id: "muted", name: "Muted", color: "#64748b", system: true },
+  { id: "hidden", name: "Hidden", color: "#475569", system: true },
+  { id: "explore", name: "Explore", color: "#2ecc71", system: true },
+];
+
 export const DEFAULT_STATE: AppState = {
   follows: {},
+  categories: DEFAULT_CATEGORIES,
+  customFeedLevels: ["main", "starred"],
   watch: {},
   revealed: {},
   manualPins: [],
@@ -48,8 +67,25 @@ export function loadAppState(): AppState {
     return DEFAULT_STATE;
   }
   try {
-    return { ...DEFAULT_STATE, ...JSON.parse(stored) };
+    const parsed = JSON.parse(stored) as Partial<AppState>;
+    return {
+      ...DEFAULT_STATE,
+      ...parsed,
+      categories: normalizeCategories(parsed.categories),
+      customFeedLevels: Array.isArray(parsed.customFeedLevels) ? parsed.customFeedLevels : DEFAULT_STATE.customFeedLevels,
+    };
   } catch {
     return DEFAULT_STATE;
   }
+}
+
+export function normalizeCategories(categories: FollowCategory[] | undefined): FollowCategory[] {
+  const byId = new Map(DEFAULT_CATEGORIES.map((category) => [category.id, category]));
+  for (const category of categories || []) {
+    if (!category?.id || !category.name) {
+      continue;
+    }
+    byId.set(category.id, { ...category, system: DEFAULT_CATEGORIES.some((item) => item.id === category.id) || category.system });
+  }
+  return Array.from(byId.values());
 }

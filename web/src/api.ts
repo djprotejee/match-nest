@@ -33,8 +33,9 @@ export async function fetchTimeline(
   return getJson<DayGroup[]>(url);
 }
 
-export async function fetchCalendar(year: number, month: number, revealSpoilers: boolean): Promise<DayGroup[]> {
+export async function fetchCalendar(year: number, month: number, revealSpoilers: boolean, levels: FollowLevel[] = ["main", "starred"]): Promise<DayGroup[]> {
   const url = apiUrl(`calendar/${year}/${month}`);
+  url.searchParams.set("level", levels.join(","));
   url.searchParams.set("reveal_spoilers", revealSpoilers ? "true" : "false");
   return getJson<DayGroup[]>(url);
 }

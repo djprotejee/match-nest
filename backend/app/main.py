@@ -24,6 +24,7 @@ from .service import (
     group_by_day,
     month_range,
     parse_enum_set,
+    parse_level_set,
     range_for_preset,
     serialize_event,
     update_f1_sessions,
@@ -93,7 +94,7 @@ WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
 class FollowUpdate(BaseModel):
-    level: FollowLevel
+    level: str
     notifications_enabled: bool = True
     hide_spoilers: bool = True
 
@@ -133,7 +134,7 @@ class CustomEntityRequest(BaseModel):
     sport: Sport
     kind: EntityKind
     color: str | None = None
-    level: FollowLevel = FollowLevel.STARRED
+    level: str = FollowLevel.STARRED.value
     aliases: list[str] = []
     bindings: list[EntityBindingPayload] = []
 
@@ -292,7 +293,7 @@ def events(
             preferences,
             start=start,
             end=end,
-            levels=parse_enum_set(level, FollowLevel),
+            levels=parse_level_set(level),
             sports=parse_enum_set(sport, Sport),
             statuses=parse_enum_set(status, EventStatus),
             apply_f1_session_filter=False,
@@ -324,7 +325,7 @@ def timeline(
         preferences,
         start=start,
         end=end,
-        levels=parse_enum_set(level, FollowLevel),
+        levels=parse_level_set(level),
         apply_f1_session_filter=False,
     )
     return group_by_day(filtered, preferences, reveal_spoilers)
@@ -334,6 +335,7 @@ def timeline(
 def calendar_month(
     year: int,
     month: int,
+    level: str | None = None,
     reveal_spoilers: bool = False,
     current_user: UserAccount | None = Depends(optional_user),
 ) -> list[dict]:
@@ -346,7 +348,7 @@ def calendar_month(
         preferences,
         start=start,
         end=end,
-        levels={FollowLevel.MAIN, FollowLevel.STARRED, FollowLevel.MUTED, FollowLevel.EXPLORE},
+        levels=parse_level_set(level),
         apply_f1_session_filter=False,
     )
     return group_by_day(filtered, preferences, reveal_spoilers)
@@ -360,7 +362,7 @@ def widget_next(current_user: UserAccount | None = Depends(optional_user)) -> di
         fetch_events(start=now, preferences=preferences),
         preferences,
         start=now,
-        levels={FollowLevel.MAIN, FollowLevel.STARRED},
+        levels={FollowLevel.MAIN.value, FollowLevel.STARRED.value},
         statuses={EventStatus.LIVE, EventStatus.DELAYED, EventStatus.UPCOMING},
     )
     if not filtered:
@@ -381,7 +383,7 @@ def set_follow(entity_id: str, update: FollowUpdate, current_user: UserAccount =
             hide_spoilers=update.hide_spoilers,
         ),
     )
-    return {"ok": True, "entity_id": entity_id, "level": update.level.value}
+    return {"ok": True, "entity_id": entity_id, "level": update.level}
 
 
 @app.put("/settings/f1-sessions")

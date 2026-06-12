@@ -541,7 +541,7 @@ def preferences_for_user(user_id: int | None) -> UserPreferences:
     preferences.follows = {
         row["entity_id"]: Follow(
             entity_id=row["entity_id"],
-            level=FollowLevel(row["level"]),
+            level=row["level"],
             notifications_enabled=bool(row["notifications_enabled"]),
             hide_spoilers=bool(row["hide_spoilers"]),
         )
@@ -571,7 +571,7 @@ def set_user_follow(user_id: int, follow: Follow) -> None:
             (
                 user_id,
                 follow.entity_id,
-                follow.level.value,
+                follow_level_value(follow.level),
                 int(follow.notifications_enabled),
                 int(follow.hide_spoilers),
                 utc_now().isoformat(),
@@ -680,7 +680,7 @@ def create_custom_entity(
     sport: Sport,
     kind: EntityKind,
     color: str,
-    level: FollowLevel,
+    level: str,
     aliases: Iterable[str] = (),
     bindings: Iterable[EntityBinding] = (),
 ) -> EntityRecord:
@@ -995,7 +995,7 @@ def initialize_user_preferences(connection: sqlite3.Connection, user_id: int) ->
             (
                 user_id,
                 follow.entity_id,
-                follow.level.value,
+                follow_level_value(follow.level),
                 int(follow.notifications_enabled),
                 int(follow.hide_spoilers),
                 now,
@@ -1154,3 +1154,7 @@ def hash_token(raw_token: str) -> str:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def follow_level_value(value) -> str:
+    return value.value if hasattr(value, "value") else str(value)

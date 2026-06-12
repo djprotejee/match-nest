@@ -43,11 +43,13 @@ import {
   CALENDAR_CACHE_PREFIX,
   type AppState,
   type FeedMode,
+  type FollowCategory,
   type ImportanceMode,
   type NotifyPreset,
   STORAGE_KEY,
   type WatchStatus,
   loadAppState,
+  normalizeCategories,
 } from "./appState";
 import { SPORTS, STATUSES } from "./config";
 import {
@@ -160,19 +162,19 @@ export function App() {
     if (currentUser && accountSettingsLoaded) {
       void loadTimeline();
     }
-  }, [range, feedMode, state.hideSpoilers, currentUser, accountSettingsLoaded]);
+  }, [range, feedMode, state.hideSpoilers, state.customFeedLevels, currentUser, accountSettingsLoaded]);
 
   useEffect(() => {
     if (currentUser && accountSettingsLoaded) {
       void loadCalendar();
     }
-  }, [monthCursor, state.hideSpoilers, currentUser, accountSettingsLoaded]);
+  }, [monthCursor, feedMode, state.hideSpoilers, state.customFeedLevels, currentUser, accountSettingsLoaded]);
 
   async function loadTimeline() {
     setLoading(true);
     try {
       const [nextTimeline, nextEntities] = await Promise.all([
-        fetchTimeline(range, !state.hideSpoilers, followLevelsForFeedMode(feedMode)),
+        fetchTimeline(range, !state.hideSpoilers, followLevelsForFeedMode(feedMode, state.customFeedLevels)),
         fetchEntities(),
       ]);
       if (nextTimeline.length || timeline.length === 0) {
@@ -184,14 +186,14 @@ export function App() {
       setCacheNote(null);
       setLastError(null);
       if (nextTimeline.length || timeline.length === 0) {
-        localStorage.setItem(timelineCacheKey(range, state.hideSpoilers, feedMode), JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
+        localStorage.setItem(timelineCacheKey(range, state.hideSpoilers, feedMode, state.customFeedLevels), JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
       }
       if (!nextTimeline.length) {
         scheduleTimelineRetry();
       }
     } catch (error) {
       setLastError(readErrorMessage(error));
-      const cached = loadCachedData(timelineCacheKey(range, state.hideSpoilers, feedMode));
+      const cached = loadCachedData(timelineCacheKey(range, state.hideSpoilers, feedMode, state.customFeedLevels));
       if (cached) {
         setTimeline(cached.timeline);
         setEntities(cached.entities);
@@ -210,13 +212,14 @@ export function App() {
   async function loadCalendar() {
     const year = monthCursor.getFullYear();
     const month = monthCursor.getMonth() + 1;
-    const cacheKey = calendarCacheKey(year, month);
+    const levels = followLevelsForFeedMode(feedMode, state.customFeedLevels);
+    const cacheKey = calendarCacheKey(year, month, levels);
     const cached = loadCachedCalendar(cacheKey);
     if (cached) {
       setCalendarGroups(cached);
     }
     try {
-      const nextGroups = await fetchCalendar(year, month, !state.hideSpoilers);
+      const nextGroups = await fetchCalendar(year, month, !state.hideSpoilers, levels);
       if (nextGroups.length || !cached) {
         setCalendarGroups(nextGroups);
       }
@@ -260,11 +263,12 @@ export function App() {
         sports,
         statuses: timelineStatuses,
         feedMode,
+        customFeedLevels: state.customFeedLevels,
         importanceMode,
         state,
         entityMap,
       }),
-    [mergedTimeline, sports, timelineStatuses, feedMode, importanceMode, state, entityMap],
+    [mergedTimeline, sports, timelineStatuses, feedMode, state.customFeedLevels, importanceMode, state, entityMap],
   );
   const filteredCalendar = useMemo(
     () =>
@@ -272,11 +276,12 @@ export function App() {
         sports,
         statuses: calendarStatuses,
         feedMode,
+        customFeedLevels: state.customFeedLevels,
         importanceMode,
         state,
         entityMap,
       }),
-    [mergedCalendar, sports, calendarStatuses, feedMode, importanceMode, state, entityMap],
+    [mergedCalendar, sports, calendarStatuses, feedMode, state.customFeedLevels, importanceMode, state, entityMap],
   );
   const conflicts = useMemo(() => findConflicts(flattenGroups(filteredTimeline)), [filteredTimeline]);
 
@@ -304,6 +309,9 @@ export function App() {
     if (Array.isArray(uiState.calendarStatuses)) {
       setCalendarStatuses(new Set(uiState.calendarStatuses.filter(isEventStatus)));
     }
+    if (Array.isArray(uiState.customFeedLevels)) {
+      updateState({ customFeedLevels: uiState.customFeedLevels.filter((value): value is FollowLevel => typeof value === "string") });
+    }
   }
 
   function syncFollowsFromEntities(nextEntities: EntityItem[]) {
@@ -312,7 +320,7 @@ export function App() {
   }
 
   function scheduleTimelineRetry() {
-    const retryKey = timelineCacheKey(range, state.hideSpoilers, feedMode);
+    const retryKey = timelineCacheKey(range, state.hideSpoilers, feedMode, state.customFeedLevels);
     if (timelineRetryRef.current !== null || timelineRetriedKeyRef.current === retryKey) {
       return;
     }
@@ -324,7 +332,7 @@ export function App() {
   }
 
   function scheduleCalendarRetry() {
-    const retryKey = calendarCacheKey(monthCursor.getFullYear(), monthCursor.getMonth() + 1);
+    const retryKey = calendarCacheKey(monthCursor.getFullYear(), monthCursor.getMonth() + 1, followLevelsForFeedMode(feedMode, state.customFeedLevels));
     if (calendarRetryRef.current !== null || calendarRetriedKeyRef.current === retryKey) {
       return;
     }
@@ -343,6 +351,59 @@ export function App() {
         setOffline(true);
         setLastError(readErrorMessage(error));
       });
+  }
+
+  function toggleCustomFeedLevel(level: FollowLevel) {
+    const selected = new Set(state.customFeedLevels);
+    if (selected.has(level)) {
+      selected.delete(level);
+    } else {
+      selected.add(level);
+    }
+    updateState({ customFeedLevels: Array.from(selected) });
+  }
+
+  function renameCategory(categoryId: FollowLevel, name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      return;
+    }
+    updateState({
+      categories: state.categories.map((category) => (category.id === categoryId ? { ...category, name: trimmed } : category)),
+    });
+  }
+
+  function createCategory(name: string) {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      return;
+    }
+    const id = uniqueCategoryId(slugifyCategory(trimmed), state.categories);
+    updateState({
+      categories: [...state.categories, { id, name: trimmed, color: nextCategoryColor(state.categories.length) }],
+      customFeedLevels: [...new Set([...state.customFeedLevels, id])],
+    });
+  }
+
+  function deleteCategory(categoryId: FollowLevel) {
+    const category = state.categories.find((item) => item.id === categoryId);
+    if (!category || category.system) {
+      return;
+    }
+    const follows = { ...state.follows };
+    const affectedEntityIds = allEntities.filter((entity) => entity.follow === categoryId).map((entity) => entity.id);
+    for (const entityId of affectedEntityIds) {
+      follows[entityId] = "explore";
+    }
+    updateState({
+      categories: state.categories.filter((item) => item.id !== categoryId),
+      customFeedLevels: state.customFeedLevels.filter((level) => level !== categoryId),
+      follows,
+    });
+    void Promise.all(affectedEntityIds.map((entityId) => saveFollowLevel(entityId, "explore"))).catch((error) => {
+      setOffline(true);
+      setLastError(readErrorMessage(error));
+    });
   }
 
   function setF1Session(session: string, enabled: boolean) {
@@ -441,6 +502,9 @@ export function App() {
           setRange={setRange}
           feedMode={feedMode}
           setFeedMode={setFeedMode}
+          categories={state.categories}
+          customFeedLevels={state.customFeedLevels}
+          toggleCustomFeedLevel={toggleCustomFeedLevel}
           importanceMode={importanceMode}
           setImportanceMode={setImportanceMode}
           statuses={timelineStatuses}
@@ -466,6 +530,9 @@ export function App() {
           setMonthCursor={setMonthCursor}
           feedMode={feedMode}
           setFeedMode={setFeedMode}
+          categories={state.categories}
+          customFeedLevels={state.customFeedLevels}
+          toggleCustomFeedLevel={toggleCustomFeedLevel}
           importanceMode={importanceMode}
           setImportanceMode={setImportanceMode}
           statuses={calendarStatuses}
@@ -483,7 +550,15 @@ export function App() {
       ) : null}
 
       {tab === "explore" ? (
-        <ExploreScreen entities={allEntities} setFollow={setFollow} refreshEntities={loadEntitiesOnly} />
+        <ExploreScreen
+          entities={allEntities}
+          categories={state.categories}
+          setFollow={setFollow}
+          refreshEntities={loadEntitiesOnly}
+          renameCategory={renameCategory}
+          createCategory={createCategory}
+          deleteCategory={deleteCategory}
+        />
       ) : null}
 
       {tab === "settings" ? (
@@ -623,6 +698,9 @@ function TimelineScreen(props: {
   setRange: (range: RangeFilter) => void;
   feedMode: FeedMode;
   setFeedMode: (mode: FeedMode) => void;
+  categories: FollowCategory[];
+  customFeedLevels: FollowLevel[];
+  toggleCustomFeedLevel: (level: FollowLevel) => void;
   importanceMode: ImportanceMode;
   setImportanceMode: (mode: ImportanceMode) => void;
   statuses: Set<EventStatus>;
@@ -655,13 +733,14 @@ function TimelineScreen(props: {
           value={props.feedMode}
           options={[
             ["main", "Main"],
-            ["starred_only", "Starred"],
-            ["main_starred", "Main + Starred"],
-            ["starred_explore", "Starred + Explore"],
-            ["all", "All"],
+            ["starred", "Starred"],
+            ["custom", "Custom"],
           ]}
           onChange={(value) => props.setFeedMode(value as FeedMode)}
         />
+        {props.feedMode === "custom" ? (
+          <CategoryChecklist categories={props.categories} selected={props.customFeedLevels} onToggle={props.toggleCustomFeedLevel} />
+        ) : null}
         <SegmentedControl
           value={props.importanceMode}
           options={[
@@ -713,6 +792,7 @@ function TimelineScreen(props: {
       ) : (
         <EventGroups
           groups={props.groups}
+          categories={props.categories}
           watch={props.watch}
           revealed={props.revealed}
           onWatch={props.onWatch}
@@ -730,6 +810,9 @@ function CalendarScreen(props: {
   setMonthCursor: (date: Date) => void;
   feedMode: FeedMode;
   setFeedMode: (mode: FeedMode) => void;
+  categories: FollowCategory[];
+  customFeedLevels: FollowLevel[];
+  toggleCustomFeedLevel: (level: FollowLevel) => void;
   importanceMode: ImportanceMode;
   setImportanceMode: (mode: ImportanceMode) => void;
   statuses: Set<EventStatus>;
@@ -792,13 +875,14 @@ function CalendarScreen(props: {
           value={props.feedMode}
           options={[
             ["main", "Main"],
-            ["starred_only", "Starred"],
-            ["main_starred", "Main + Starred"],
-            ["starred_explore", "Starred + Explore"],
-            ["all", "All"],
+            ["starred", "Starred"],
+            ["custom", "Custom"],
           ]}
           onChange={(value) => props.setFeedMode(value as FeedMode)}
         />
+        {props.feedMode === "custom" ? (
+          <CategoryChecklist categories={props.categories} selected={props.customFeedLevels} onToggle={props.toggleCustomFeedLevel} />
+        ) : null}
         <SegmentedControl
           value={props.importanceMode}
           options={[
@@ -890,6 +974,7 @@ function CalendarScreen(props: {
 
       <EventGroups
         groups={selectedGroups}
+        categories={props.categories}
         watch={props.watch}
         revealed={props.revealed}
         onWatch={props.onWatch}
@@ -902,12 +987,20 @@ function CalendarScreen(props: {
 
 function ExploreScreen({
   entities,
+  categories,
   setFollow,
   refreshEntities,
+  renameCategory,
+  createCategory,
+  deleteCategory,
 }: {
   entities: EntityItem[];
+  categories: FollowCategory[];
   setFollow: (entityId: string, level: FollowLevel) => void;
   refreshEntities: () => Promise<void>;
+  renameCategory: (categoryId: FollowLevel, name: string) => void;
+  createCategory: (name: string) => void;
+  deleteCategory: (categoryId: FollowLevel) => void;
 }) {
   const [query, setQuery] = useState("");
   const [sportFilter, setSportFilter] = useState<Sport | "all">("all");
@@ -920,6 +1013,7 @@ function ExploreScreen({
   const [newSport, setNewSport] = useState<Sport>("football");
   const [newKind, setNewKind] = useState("team");
   const [newLevel, setNewLevel] = useState<FollowLevel>("starred");
+  const [newCategoryName, setNewCategoryName] = useState("");
   const [newAliases, setNewAliases] = useState("");
   const [newBindings, setNewBindings] = useState<Array<{ provider: string; binding_type: string; value: string }>>([]);
   const [busy, setBusy] = useState(false);
@@ -944,8 +1038,10 @@ function ExploreScreen({
     [entities, query, sportFilter, kindFilter, levelFilter],
   );
   const groups = groupEntities(filteredEntities);
-  const stats = followLevels().map((level) => ({
+  const levels = followLevels(categories);
+  const stats = levels.map((level) => ({
     level,
+    category: categoryForLevel(categories, level),
     count: entities.filter((entity) => entity.follow === level).length,
   }));
 
@@ -1016,7 +1112,7 @@ function ExploreScreen({
               type="button"
               onClick={() => setLevelFilter(levelFilter === item.level ? "all" : item.level)}
             >
-              {item.level}
+              {item.category.name}
               <strong>{item.count}</strong>
             </button>
           ))}
@@ -1047,9 +1143,9 @@ function ExploreScreen({
           </select>
           <select value={levelFilter} onChange={(event) => setLevelFilter(event.target.value as FollowLevel | "all")}>
             <option value="all">All levels</option>
-            {followLevels().map((level) => (
+            {levels.map((level) => (
               <option key={level} value={level}>
-                {level}
+                {categoryForLevel(categories, level).name}
               </option>
             ))}
           </select>
@@ -1069,7 +1165,7 @@ function ExploreScreen({
           </div>
           <div className="entity-card-grid">
             {searchResult.local.map((entity) => (
-              <EntityCard entity={entity} key={entity.id} setFollow={setFollow} onDetails={openDetails} />
+              <EntityCard entity={entity} categories={categories} key={entity.id} setFollow={setFollow} onDetails={openDetails} />
             ))}
             {searchResult.candidates.map((candidate, index) => (
               <article className="entity-card" key={`${candidate.provider}-${candidate.name}-${index}`}>
@@ -1115,7 +1211,7 @@ function ExploreScreen({
             <option value="competition">Tournament</option>
             <option value="player">Player</option>
           </select>
-          <FollowSelect value={newLevel} onChange={setNewLevel} />
+          <FollowSelect categories={categories} value={newLevel} onChange={setNewLevel} />
         </div>
         <input value={newAliases} onChange={(event) => setNewAliases(event.target.value)} placeholder="Aliases, comma separated" />
         {newBindings.length ? (
@@ -1133,19 +1229,52 @@ function ExploreScreen({
         </button>
       </section>
 
+      <section className="settings-card category-manager">
+        <h3>Categories</h3>
+        <div className="category-editor-list">
+          {categories.map((category) => (
+            <div className="category-editor-row" key={category.id}>
+              <span className="entity-dot" style={{ backgroundColor: category.color }} />
+              <input value={category.name} onChange={(event) => renameCategory(category.id, event.target.value)} aria-label={`${category.name} category name`} />
+              {category.system ? (
+                <span className="category-lock">System</span>
+              ) : (
+                <button className="text-action danger" type="button" onClick={() => deleteCategory(category.id)}>
+                  Delete
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="category-create-row">
+          <input value={newCategoryName} onChange={(event) => setNewCategoryName(event.target.value)} placeholder="New category name" />
+          <button
+            className="secondary-action"
+            type="button"
+            onClick={() => {
+              createCategory(newCategoryName);
+              setNewCategoryName("");
+            }}
+          >
+            Add category
+          </button>
+        </div>
+      </section>
+
       <div className="entity-hub">
-        {followLevels().map((level) => {
+        {levels.map((level) => {
           const items = groups.get(level) || [];
+          const category = categoryForLevel(categories, level);
           return (
             <section className="entity-category" key={level}>
               <div className="entity-category-header">
-                <h3>{level}</h3>
+                <h3>{category.name}</h3>
                 <span>{items.length}</span>
               </div>
               {items.length ? (
                 <div className="entity-card-grid">
                   {items.map((entity) => (
-                    <EntityCard entity={entity} key={entity.id} setFollow={setFollow} onDetails={openDetails} />
+                    <EntityCard entity={entity} categories={categories} key={entity.id} setFollow={setFollow} onDetails={openDetails} />
                   ))}
                 </div>
               ) : (
@@ -1159,6 +1288,7 @@ function ExploreScreen({
       {selectedEntity ? (
         <EntityDrawer
           entity={selectedEntity}
+          categories={categories}
           onClose={() => setSelectedEntity(null)}
           setFollow={setFollow}
           refreshEntities={refreshEntities}
@@ -1171,10 +1301,12 @@ function ExploreScreen({
 
 function EntityCard({
   entity,
+  categories,
   setFollow,
   onDetails,
 }: {
   entity: EntityItem;
+  categories: FollowCategory[];
   setFollow: (entityId: string, level: FollowLevel) => void;
   onDetails: (entity: EntityItem) => void;
 }) {
@@ -1187,19 +1319,21 @@ function EntityCard({
           {sportLabel(entity.sport)} - {kindLabel(entity.kind)}
         </span>
       </button>
-      <FollowSelect value={entity.follow} onChange={(level) => setFollow(entity.id, level)} />
+      <FollowSelect categories={categories} value={entity.follow} onChange={(level) => setFollow(entity.id, level)} />
     </article>
   );
 }
 
 function EntityDrawer({
   entity,
+  categories,
   onClose,
   setFollow,
   refreshEntities,
   setSelectedEntity,
 }: {
   entity: EntityItem;
+  categories: FollowCategory[];
   onClose: () => void;
   setFollow: (entityId: string, level: FollowLevel) => void;
   refreshEntities: () => Promise<void>;
@@ -1268,7 +1402,7 @@ function EntityDrawer({
           </button>
         </div>
       </div>
-      <FollowSelect value={entity.follow} onChange={(level) => setFollow(entity.id, level)} />
+      <FollowSelect categories={categories} value={entity.follow} onChange={(level) => setFollow(entity.id, level)} />
       {isEditing ? (
         <div className="drawer-form">
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" />
@@ -1452,6 +1586,7 @@ function ManualPinForm({ onAdd }: { onAdd: (event: MatchEvent) => void }) {
 
 function EventGroups(props: {
   groups: DayGroup[];
+  categories: FollowCategory[];
   watch: Record<string, WatchStatus>;
   revealed: Record<string, boolean>;
   onWatch: (eventId: string, value: WatchStatus) => void;
@@ -1470,6 +1605,7 @@ function EventGroups(props: {
           {group.events.map((event) => (
             <EventCard
               event={event}
+              categories={props.categories}
               key={event.id}
               watch={props.watch[event.id] || "none"}
               revealed={props.revealed[event.id] || false}
@@ -1486,6 +1622,7 @@ function EventGroups(props: {
 
 function EventCard(props: {
   event: MatchEvent;
+  categories: FollowCategory[];
   watch: WatchStatus;
   revealed: boolean;
   onWatch: (eventId: string, value: WatchStatus) => void;
@@ -1493,6 +1630,7 @@ function EventCard(props: {
   onRemoveManual: (eventId: string) => void;
 }) {
   const event = props.event;
+  const category = categoryForLevel(props.categories, event.follow_level);
   const [details, setDetails] = useState<EventDetails | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -1535,7 +1673,7 @@ function EventCard(props: {
         <span className={`sport-tag sport-${event.sport}`}>{sportLabel(event.sport)}</span>
         {event.competition ? <span>{event.competition}</span> : null}
         <span className={event.follow_level === "main" ? "main-badge" : "starred-badge"}>
-          {event.follow_level === "main" ? "Main" : "Starred"}
+          {category.name}
         </span>
       </div>
 
@@ -1791,6 +1929,28 @@ function SegmentedControl(props: {
   );
 }
 
+function CategoryChecklist({
+  categories,
+  selected,
+  onToggle,
+}: {
+  categories: FollowCategory[];
+  selected: FollowLevel[];
+  onToggle: (level: FollowLevel) => void;
+}) {
+  return (
+    <div className="category-checklist">
+      {categories.map((category) => (
+        <label className="category-check" key={category.id}>
+          <input type="checkbox" checked={selected.includes(category.id)} onChange={() => onToggle(category.id)} />
+          <span style={{ backgroundColor: category.color }} />
+          {category.name}
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function ToggleRow(props: { label: string; enabled: boolean; onChange: (value: boolean) => void }) {
   return (
     <label className="toggle-row">
@@ -1800,12 +1960,20 @@ function ToggleRow(props: { label: string; enabled: boolean; onChange: (value: b
   );
 }
 
-function FollowSelect({ value, onChange }: { value: FollowLevel; onChange: (value: FollowLevel) => void }) {
+function FollowSelect({
+  categories,
+  value,
+  onChange,
+}: {
+  categories: FollowCategory[];
+  value: FollowLevel;
+  onChange: (value: FollowLevel) => void;
+}) {
   return (
     <select className="compact-select" value={value} onChange={(event) => onChange(event.target.value as FollowLevel)}>
-      {followLevels().map((level) => (
+      {followLevels(categories).map((level) => (
         <option key={level} value={level}>
-          {level}
+          {categoryForLevel(categories, level).name}
         </option>
       ))}
     </select>
@@ -1845,12 +2013,12 @@ function loadCachedData(cacheKey: string): { at: number; timeline: DayGroup[]; e
   }
 }
 
-function timelineCacheKey(range: RangeFilter, hideSpoilers: boolean, feedMode: FeedMode): string {
-  return `${CACHE_PREFIX}${range}.${feedMode}.${hideSpoilers ? "hidden" : "revealed"}`;
+function timelineCacheKey(range: RangeFilter, hideSpoilers: boolean, feedMode: FeedMode, customFeedLevels: FollowLevel[]): string {
+  return `${CACHE_PREFIX}${range}.${feedMode}.${customFeedLevels.join("_")}.${hideSpoilers ? "hidden" : "revealed"}`;
 }
 
-function calendarCacheKey(year: number, month: number): string {
-  return `${CALENDAR_CACHE_PREFIX}${year}-${String(month).padStart(2, "0")}`;
+function calendarCacheKey(year: number, month: number, levels: FollowLevel[] = []): string {
+  return `${CALENDAR_CACHE_PREFIX}${year}-${String(month).padStart(2, "0")}.${levels.join("_") || "default"}`;
 }
 
 function mergeAccountSettings(current: AppState, settings: {
@@ -1862,6 +2030,8 @@ function mergeAccountSettings(current: AppState, settings: {
   return {
     ...current,
     ...uiState,
+    categories: normalizeCategories(uiState.categories),
+    customFeedLevels: Array.isArray(uiState.customFeedLevels) ? uiState.customFeedLevels : current.customFeedLevels,
     follows: current.follows,
     apiUrl: current.apiUrl,
     f1Sessions: f1SessionsRecord(settings.f1_sessions),
@@ -1913,12 +2083,15 @@ function isRangeFilter(value: unknown): value is RangeFilter {
 }
 
 function isFeedMode(value: unknown): value is FeedMode {
-  return value === "main" || value === "starred_only" || value === "main_starred" || value === "starred_explore" || value === "all";
+  return value === "main" || value === "starred" || value === "custom";
 }
 
 function normalizeFeedMode(value: unknown): FeedMode | null {
-  if (value === "starred") {
-    return "main_starred";
+  if (value === "main_starred" || value === "all" || value === "starred") {
+    return "starred";
+  }
+  if (value === "starred_only" || value === "starred_explore") {
+    return "custom";
   }
   return isFeedMode(value) ? value : null;
 }
@@ -1994,8 +2167,42 @@ function groupEntities(entities: EntityItem[]) {
   return grouped;
 }
 
-function followLevels(): FollowLevel[] {
-  return ["main", "starred", "muted", "hidden", "explore"];
+function followLevels(categories: FollowCategory[]): FollowLevel[] {
+  return categories.map((category) => category.id);
+}
+
+function categoryForLevel(categories: FollowCategory[], level: FollowLevel): FollowCategory {
+  return categories.find((category) => category.id === level) || { id: level, name: titleCase(level), color: "#9aa3b2" };
+}
+
+function slugifyCategory(name: string): string {
+  const slug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return slug || "category";
+}
+
+function uniqueCategoryId(base: string, categories: FollowCategory[]): string {
+  const existing = new Set(categories.map((category) => category.id));
+  if (!existing.has(base)) {
+    return base;
+  }
+  let suffix = 2;
+  while (existing.has(`${base}_${suffix}`)) {
+    suffix += 1;
+  }
+  return `${base}_${suffix}`;
+}
+
+function nextCategoryColor(index: number): string {
+  const colors = ["#38bdf8", "#f97316", "#14b8a6", "#ec4899", "#a3e635", "#facc15", "#fb7185"];
+  return colors[index % colors.length];
+}
+
+function titleCase(value: string): string {
+  return value
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function entityKinds(entities: EntityItem[]): string[] {

@@ -17,7 +17,7 @@ def entity_payload(record, preferences: UserPreferences, include_detail: bool = 
         "sport": entity.sport.value,
         "kind": entity.kind.value,
         "color": entity.color,
-        "follow": preferences.follows.get(entity.id).level.value if entity.id in preferences.follows else "explore",
+        "follow": follow_level_value(preferences.follows.get(entity.id).level) if entity.id in preferences.follows else "explore",
     }
     if include_detail:
         payload["aliases"] = record.aliases
@@ -42,6 +42,10 @@ def default_entity_color(sport: Sport, kind: EntityKind) -> str:
     if kind == EntityKind.COMPETITION:
         return "#8B5CF6"
     return "#2ECC71"
+
+
+def follow_level_value(value) -> str:
+    return value.value if hasattr(value, "value") else str(value)
 
 
 def entity_bindings_from_payload(bindings) -> list[EntityBinding]:

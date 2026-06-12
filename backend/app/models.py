@@ -60,7 +60,7 @@ class Entity:
 @dataclass
 class Follow:
     entity_id: str
-    level: FollowLevel
+    level: str
     notifications_enabled: bool = True
     hide_spoilers: bool = True
 

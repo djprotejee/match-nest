@@ -8,30 +8,37 @@ from typing import Iterable
 from .models import Event, EventStatus, F1Session, FollowLevel, KYIV_TZ, Sport, UserPreferences
 
 
-def visible_follow_level(event: Event, preferences: UserPreferences) -> FollowLevel:
+def follow_level_value(value) -> str:
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def visible_follow_level(event: Event, preferences: UserPreferences) -> str:
     # One event can match several entities. Main should always win over starred
     # so a Ukraine match in UEFA Euro still lands in the primary feed.
-    levels: list[FollowLevel] = []
+    levels: list[str] = []
     for entity_id in event.entity_ids:
         follow = preferences.follow_for(entity_id)
         if follow:
-            levels.append(follow.level)
+            levels.append(follow_level_value(follow.level))
 
-    if FollowLevel.HIDDEN in levels:
-        return FollowLevel.HIDDEN
-    if FollowLevel.MAIN in levels:
-        return FollowLevel.MAIN
-    if FollowLevel.STARRED in levels:
-        return FollowLevel.STARRED
-    if FollowLevel.MUTED in levels:
-        return FollowLevel.MUTED
-    return FollowLevel.EXPLORE
+    if FollowLevel.HIDDEN.value in levels:
+        return FollowLevel.HIDDEN.value
+    if FollowLevel.MAIN.value in levels:
+        return FollowLevel.MAIN.value
+    if FollowLevel.STARRED.value in levels:
+        return FollowLevel.STARRED.value
+    custom_levels = [level for level in levels if level not in {FollowLevel.MUTED.value, FollowLevel.EXPLORE.value}]
+    if custom_levels:
+        return custom_levels[0]
+    if FollowLevel.MUTED.value in levels:
+        return FollowLevel.MUTED.value
+    return FollowLevel.EXPLORE.value
 
 
 def should_show_event(
     event: Event,
     preferences: UserPreferences,
-    levels: set[FollowLevel] | None = None,
+    levels: set[str] | None = None,
     sports: set[Sport] | None = None,
     statuses: set[EventStatus] | None = None,
     apply_f1_session_filter: bool = True,
@@ -40,7 +47,7 @@ def should_show_event(
     # Visibility is resolved before date filtering because hidden entities should
     # never leak into timeline, calendar, widget, or notification payloads.
     level = visible_follow_level(event, preferences)
-    if level == FollowLevel.HIDDEN:
+    if level == FollowLevel.HIDDEN.value:
         return False
     if levels and level not in levels:
         return False
@@ -58,7 +65,7 @@ def filter_events(
     preferences: UserPreferences,
     start: datetime | None = None,
     end: datetime | None = None,
-    levels: set[FollowLevel] | None = None,
+    levels: set[str] | None = None,
     sports: set[Sport] | None = None,
     statuses: set[EventStatus] | None = None,
     apply_f1_session_filter: bool = True,
@@ -116,7 +123,7 @@ def serialize_event(event: Event, preferences: UserPreferences, reveal_spoilers:
     payload["status"] = event.status.value
     payload["session_type"] = event.session_type.value if event.session_type else None
     payload["starts_at"] = event.starts_at.isoformat() if event.starts_at else None
-    payload["follow_level"] = level.value
+    payload["follow_level"] = level
     payload["result_hidden"] = hide_result
     payload["result_summary"] = event.result_summary
     return payload
@@ -150,6 +157,12 @@ def parse_enum_set(values: str | None, enum_type):
     if not values:
         return None
     return {enum_type(value.strip()) for value in values.split(",") if value.strip()}
+
+
+def parse_level_set(values: str | None) -> set[str] | None:
+    if not values:
+        return None
+    return {value.strip() for value in values.split(",") if value.strip()}
 
 
 def update_f1_sessions(preferences: UserPreferences, values: Iterable[str]) -> UserPreferences:
