@@ -145,7 +145,7 @@ def provider_results(
     events = dedupe_cross_source_events(list_events(start, end))
     if events:
         write_events_cache(cache_key, events)
-    elif any(result.error for result in results):
+    else:
         stale_events = read_events_cache(cache_key)
         if stale_events:
             events = stale_events
@@ -154,7 +154,7 @@ def provider_results(
                     name="StaleDiskCache",
                     configured=True,
                     count=len(stale_events),
-                    error="Serving last successful cache because a provider request failed.",
+                    error="Serving last successful cache while providers refresh.",
                 )
             )
 
@@ -198,13 +198,16 @@ def refresh_provider(
         provider_events = provider.fetch(start=start, end=end)
         upsert_events(provider_events)
         mark_provider_fetch(provider_name, cache_key, "ok")
+        _CACHE.pop(cache_key, None)
         return provider_events
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         mark_provider_fetch(provider_name, cache_key, "error", f"HTTP {exc.code}: {body}")
+        _CACHE.pop(cache_key, None)
         raise
     except Exception as exc:
         mark_provider_fetch(provider_name, cache_key, "error", str(exc))
+        _CACHE.pop(cache_key, None)
         raise
 
 
@@ -223,13 +226,23 @@ def fetch_events(
 
 def fetch_event_details(event_id: str) -> dict | None:
     load_environment()
-    if event_id.startswith("f1-"):
-        return JolpicaF1Provider().details(event_id)
-    if event_id.startswith("f4-"):
-        return F4CalendarProvider().details(event_id)
-    if event_id.startswith("cs2-"):
-        return PandaScoreCS2Provider().details(event_id, get_event(event_id))
-    return None
+    try:
+        if event_id.startswith("f1-"):
+            return JolpicaF1Provider().details(event_id)
+        if event_id.startswith("f4-"):
+            return F4CalendarProvider().details(event_id)
+        if event_id.startswith("cs2-"):
+            return PandaScoreCS2Provider().details(event_id, get_event(event_id))
+        return None
+    except Exception as exc:
+        return {
+            "event_id": event_id,
+            "sport": "formula" if event_id.startswith("f1-") else "unknown",
+            "source": "matchnest",
+            "summary": f"Details are temporarily unavailable: {exc}",
+            "facts": [],
+            "sections": [],
+        }
 
 
 def provider_is_configured(provider: EventProvider) -> bool:

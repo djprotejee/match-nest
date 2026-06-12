@@ -90,8 +90,8 @@ export function App() {
   const [accountSettingsLoaded, setAccountSettingsLoaded] = useState(false);
   const timelineRetryRef = useRef<number | null>(null);
   const calendarRetryRef = useRef<number | null>(null);
-  const timelineRetriedKeyRef = useRef<string | null>(null);
-  const calendarRetriedKeyRef = useRef<string | null>(null);
+  const timelineRetryCountsRef = useRef<Record<string, number>>({});
+  const calendarRetryCountsRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     const callbackToken = new URLSearchParams(window.location.search).get("auth_token");
@@ -171,34 +171,43 @@ export function App() {
   }, [monthCursor, feedMode, state.hideSpoilers, state.customFeedLevels, currentUser, accountSettingsLoaded]);
 
   async function loadTimeline() {
+    const cacheKey = timelineCacheKey(range, state.hideSpoilers, feedMode, state.customFeedLevels);
+    const cached = loadCachedData(cacheKey);
+    if (cached && timeline.length === 0) {
+      setTimeline(cached.timeline);
+      setEntities(cached.entities);
+      setCacheNote(`Cached ${formatRelativeTime(cached.at)}`);
+    }
     setLoading(true);
     try {
       const [nextTimeline, nextEntities] = await Promise.all([
         fetchTimeline(range, !state.hideSpoilers, followLevelsForFeedMode(feedMode, state.customFeedLevels)),
         fetchEntities(),
       ]);
-      if (nextTimeline.length || timeline.length === 0) {
+      if (nextTimeline.length) {
         setTimeline(nextTimeline);
+      } else if (!cached && timeline.length === 0) {
+        setTimeline([]);
       }
       setEntities(nextEntities);
       syncFollowsFromEntities(nextEntities);
       setOffline(false);
-      setCacheNote(null);
+      setCacheNote(nextTimeline.length ? null : cached ? `Cached ${formatRelativeTime(cached.at)}. Refreshing...` : "Refreshing events...");
       setLastError(null);
-      if (nextTimeline.length || timeline.length === 0) {
-        localStorage.setItem(timelineCacheKey(range, state.hideSpoilers, feedMode, state.customFeedLevels), JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
+      if (nextTimeline.length) {
+        localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
+        timelineRetryCountsRef.current[cacheKey] = 0;
       }
       if (!nextTimeline.length) {
         scheduleTimelineRetry();
       }
     } catch (error) {
       setLastError(readErrorMessage(error));
-      const cached = loadCachedData(timelineCacheKey(range, state.hideSpoilers, feedMode, state.customFeedLevels));
       if (cached) {
         setTimeline(cached.timeline);
         setEntities(cached.entities);
         setCacheNote(`Cached ${formatRelativeTime(cached.at)}`);
-      } else {
+      } else if (timeline.length === 0) {
         setTimeline(fallbackTimeline);
         setEntities(fallbackEntities);
         setCacheNote("Local preview data");
@@ -220,17 +229,20 @@ export function App() {
     }
     try {
       const nextGroups = await fetchCalendar(year, month, !state.hideSpoilers, levels);
-      if (nextGroups.length || !cached) {
+      if (nextGroups.length) {
         setCalendarGroups(nextGroups);
+      } else if (!cached && calendarGroups.length === 0) {
+        setCalendarGroups([]);
       }
-      if (nextGroups.length || !cached) {
+      if (nextGroups.length) {
         localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), groups: nextGroups }));
+        calendarRetryCountsRef.current[cacheKey] = 0;
       }
       if (!nextGroups.length) {
         scheduleCalendarRetry();
       }
     } catch {
-      if (!cached) {
+      if (!cached && calendarGroups.length === 0) {
         setCalendarGroups(fallbackTimeline);
       }
     }
@@ -321,26 +333,28 @@ export function App() {
 
   function scheduleTimelineRetry() {
     const retryKey = timelineCacheKey(range, state.hideSpoilers, feedMode, state.customFeedLevels);
-    if (timelineRetryRef.current !== null || timelineRetriedKeyRef.current === retryKey) {
+    const count = timelineRetryCountsRef.current[retryKey] || 0;
+    if (timelineRetryRef.current !== null || count >= 6) {
       return;
     }
-    timelineRetriedKeyRef.current = retryKey;
+    timelineRetryCountsRef.current[retryKey] = count + 1;
     timelineRetryRef.current = window.setTimeout(() => {
       timelineRetryRef.current = null;
       void loadTimeline();
-    }, 3500);
+    }, count < 2 ? 3500 : 8000);
   }
 
   function scheduleCalendarRetry() {
     const retryKey = calendarCacheKey(monthCursor.getFullYear(), monthCursor.getMonth() + 1, followLevelsForFeedMode(feedMode, state.customFeedLevels));
-    if (calendarRetryRef.current !== null || calendarRetriedKeyRef.current === retryKey) {
+    const count = calendarRetryCountsRef.current[retryKey] || 0;
+    if (calendarRetryRef.current !== null || count >= 6) {
       return;
     }
-    calendarRetriedKeyRef.current = retryKey;
+    calendarRetryCountsRef.current[retryKey] = count + 1;
     calendarRetryRef.current = window.setTimeout(() => {
       calendarRetryRef.current = null;
       void loadCalendar();
-    }, 3500);
+    }, count < 2 ? 3500 : 8000);
   }
 
   function setFollow(entityId: string, level: FollowLevel) {
@@ -370,6 +384,15 @@ export function App() {
     }
     updateState({
       categories: state.categories.map((category) => (category.id === categoryId ? { ...category, name: trimmed } : category)),
+    });
+  }
+
+  function updateCategoryColor(categoryId: FollowLevel, color: string) {
+    if (!/^#[0-9a-f]{6}$/i.test(color)) {
+      return;
+    }
+    updateState({
+      categories: state.categories.map((category) => (category.id === categoryId ? { ...category, color } : category)),
     });
   }
 
@@ -556,6 +579,7 @@ export function App() {
           setFollow={setFollow}
           refreshEntities={loadEntitiesOnly}
           renameCategory={renameCategory}
+          updateCategoryColor={updateCategoryColor}
           createCategory={createCategory}
           deleteCategory={deleteCategory}
         />
@@ -991,6 +1015,7 @@ function ExploreScreen({
   setFollow,
   refreshEntities,
   renameCategory,
+  updateCategoryColor,
   createCategory,
   deleteCategory,
 }: {
@@ -999,6 +1024,7 @@ function ExploreScreen({
   setFollow: (entityId: string, level: FollowLevel) => void;
   refreshEntities: () => Promise<void>;
   renameCategory: (categoryId: FollowLevel, name: string) => void;
+  updateCategoryColor: (categoryId: FollowLevel, color: string) => void;
   createCategory: (name: string) => void;
   deleteCategory: (categoryId: FollowLevel) => void;
 }) {
@@ -1236,6 +1262,10 @@ function ExploreScreen({
             <div className="category-editor-row" key={category.id}>
               <span className="entity-dot" style={{ backgroundColor: category.color }} />
               <input value={category.name} onChange={(event) => renameCategory(category.id, event.target.value)} aria-label={`${category.name} category name`} />
+              <label className="color-field" aria-label={`${category.name} category color`}>
+                <span style={{ backgroundColor: category.color }} />
+                <input type="color" value={category.color} onChange={(event) => updateCategoryColor(category.id, event.target.value)} />
+              </label>
               {category.system ? (
                 <span className="category-lock">System</span>
               ) : (

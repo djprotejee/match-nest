@@ -586,10 +586,13 @@ def fastf1_session_details(
     except Exception:
         return None
 
-    if session_filter == "SQ":
-        section = fastf1_qualifying_section(session, "Sprint Qualifying classification")
-    else:
-        section = fastf1_practice_section(session, f"{session.name} best laps")
+    try:
+        if session_filter == "SQ":
+            section = fastf1_qualifying_section(session, "Sprint Qualifying classification")
+        else:
+            section = fastf1_practice_section(session, f"{session.name} best laps")
+    except Exception:
+        return None
     if section is None:
         return None
 
