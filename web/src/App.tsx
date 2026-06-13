@@ -77,7 +77,7 @@ export function App() {
   const [feedMode, setFeedMode] = useState<FeedMode>("main");
   const [importanceMode, setImportanceMode] = useState<ImportanceMode>("all");
   const [timelineStatuses, setTimelineStatuses] = useState<Set<EventStatus>>(new Set(["live", "delayed", "upcoming"]));
-  const [calendarStatuses, setCalendarStatuses] = useState<Set<EventStatus>>(new Set(["past", "live", "delayed", "upcoming"]));
+  const [calendarStatuses, setCalendarStatuses] = useState<Set<EventStatus>>(new Set(["live", "delayed", "upcoming"]));
   const [sports, setSports] = useState<Set<Sport>>(new Set(SPORTS));
   const [monthCursor, setMonthCursor] = useState(() => new Date());
   const [timeline, setTimeline] = useState<DayGroup[]>([]);
@@ -1889,7 +1889,7 @@ function EventCard(props: {
     <article className={`event-card sport-border-${event.sport} ${props.watch === "skip" ? "is-skipped" : ""}`}>
       <div className="event-meta">
         <span className={`status status-${event.status}`}>{event.status}</span>
-        <span>{formatEventTime(event.starts_at)}</span>
+        <span>{formatEventTimeForEvent(event)}</span>
         <span className="timezone-badge">Kyiv</span>
         <span className="source-badge" title="Data source">
           <span aria-hidden="true" />
@@ -2009,6 +2009,13 @@ function tableColumnClass(column: string): string | undefined {
     return "tyre-strategy-cell";
   }
   return undefined;
+}
+
+function formatEventTimeForEvent(event: MatchEvent): string {
+  if (event.source === "f4-calendar") {
+    return "TBD";
+  }
+  return formatEventTime(event.starts_at);
 }
 
 function CalendarDay({

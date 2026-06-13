@@ -76,7 +76,7 @@ class F4CalendarProvider(EventProvider):
                     title=f"Italian F4 - {weekend.name} Day {day_number}",
                     sport=Sport.FORMULA,
                     starts_at=starts_at.astimezone(timezone.utc),
-                    status=status_from_start(starts_at),
+                    status=status_from_date(current_date),
                     entity_ids=["bondarev", "italian_f4"],
                     source=self.source,
                     competition="Italian F4 Championship",
@@ -99,8 +99,9 @@ class F4CalendarProvider(EventProvider):
         return None, None
 
 
-def status_from_start(starts_at: datetime) -> EventStatus:
-    return EventStatus.PAST if starts_at.astimezone(timezone.utc) < datetime.now(timezone.utc) else EventStatus.UPCOMING
+def status_from_date(event_date) -> EventStatus:
+    today = datetime.now(ROME_TZ).date()
+    return EventStatus.PAST if event_date < today else EventStatus.UPCOMING
 
 
 ITALIAN_F4_2026_WEEKENDS = [

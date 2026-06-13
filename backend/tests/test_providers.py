@@ -8,6 +8,7 @@ from app.models import Event, EventStatus, F1Session, Sport
 from app.providers.api_football import ApiFootballProvider, api_football_seasons, api_football_status
 from app.providers.espn_football import EspnFootballProvider, month_keys
 from app.providers.registry import dedupe_cross_source_events, followed_football_competitions, followed_football_team_queries, provider_should_refresh
+from app.providers.f4_calendar import F4CalendarProvider
 from app.providers.f1_jolpica import parse_utc_datetime
 from app.providers.football_data import (
     dedupe_matches,
@@ -36,6 +37,17 @@ class ProviderMappingTests(unittest.TestCase):
         parsed = parse_utc_datetime({"date": "2026-06-14", "time": "13:00:00Z"})
 
         self.assertEqual(parsed, datetime(2026, 6, 14, 13, 0, tzinfo=timezone.utc))
+
+    def test_f4_weekend_is_split_into_day_events(self) -> None:
+        provider = F4CalendarProvider()
+
+        events = provider.fetch(
+            start=datetime(2026, 6, 19, tzinfo=timezone.utc),
+            end=datetime(2026, 6, 22, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual([event.title for event in events], ["Italian F4 - Monza Day 1", "Italian F4 - Monza Day 2", "Italian F4 - Monza Day 3"])
+        self.assertTrue(all(event.source == "f4-calendar" for event in events))
 
     def test_football_maps_main_team_and_starred_competition(self) -> None:
         ids = football_entity_ids("Ukraine", "France", "UEFA Euro")

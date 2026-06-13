@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime
 
-from app.models import EventStatus, F1Session, FollowLevel, KYIV_TZ, Sport
+from app.models import Event, EventStatus, F1Session, FollowLevel, KYIV_TZ, Sport
 from app.seed import DEFAULT_PREFERENCES, demo_events
 from app.service import filter_events, month_range, serialize_event, visible_follow_level
 
@@ -31,7 +31,22 @@ class ServiceTests(unittest.TestCase):
         event = next(item for item in self.events if item.id == "barca-past-demo")
         payload = serialize_event(event, DEFAULT_PREFERENCES)
         self.assertTrue(payload["result_hidden"])
-        self.assertEqual(payload["result_summary"], "Barcelona 2-1 Real Madrid")
+        self.assertIsNone(payload["result_summary"])
+
+    def test_spoiler_result_is_hidden_for_live_event(self) -> None:
+        event = Event(
+            id="live-score",
+            title="NAVI vs TheMongolz",
+            sport=Sport.CS2,
+            starts_at=self.now,
+            status=EventStatus.LIVE,
+            entity_ids=["navi"],
+            source="pandascore",
+            result_summary="1-1",
+        )
+        payload = serialize_event(event, DEFAULT_PREFERENCES)
+        self.assertTrue(payload["result_hidden"])
+        self.assertIsNone(payload["result_summary"])
 
     def test_spoiler_result_can_be_revealed(self) -> None:
         event = next(item for item in self.events if item.id == "barca-past-demo")

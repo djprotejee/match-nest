@@ -114,7 +114,7 @@ def serialize_event(event: Event, preferences: UserPreferences, reveal_spoilers:
     # it in the UI. That keeps widgets and notifications spoiler-safe too.
     hide_result = (
         preferences.default_hide_spoilers
-        and event.status == EventStatus.PAST
+        and event.status in {EventStatus.PAST, EventStatus.LIVE, EventStatus.DELAYED}
         and event.result_summary is not None
         and not reveal_spoilers
     )
@@ -125,7 +125,7 @@ def serialize_event(event: Event, preferences: UserPreferences, reveal_spoilers:
     payload["starts_at"] = event.starts_at.isoformat() if event.starts_at else None
     payload["follow_level"] = level
     payload["result_hidden"] = hide_result
-    payload["result_summary"] = event.result_summary
+    payload["result_summary"] = None if hide_result else event.result_summary
     return payload
 
 

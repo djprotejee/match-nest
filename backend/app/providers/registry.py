@@ -232,10 +232,33 @@ def fetch_event_details(event_id: str) -> dict | None:
             "event_id": event_id,
             "sport": "formula" if event_id.startswith("f1-") else "unknown",
             "source": "matchnest",
-            "summary": f"Details are temporarily unavailable: {exc}",
-            "facts": [],
+            "summary": detail_error_summary(event_id, exc),
+            "facts": [{"label": "Provider message", "value": detail_error_message(exc)}],
             "sections": [],
         }
+
+
+def detail_error_summary(event_id: str, exc: Exception) -> str:
+    message = str(exc)
+    if event_id.startswith("f1-") and ("403" in message or "Forbidden" in message):
+        return (
+            "Session classification is not available yet, or the upstream timing provider "
+            "temporarily refused access. Try again later."
+        )
+    if event_id.startswith("f1-") and ("DataNotLoadedError" in message or "not been loaded" in message):
+        return "Session timing data has not been published by the upstream provider yet. Try again later."
+    return "Details are temporarily unavailable. Try again later."
+
+
+def detail_error_message(exc: Exception) -> str:
+    message = str(exc).strip()
+    if not message:
+        return exc.__class__.__name__
+    if "403" in message or "Forbidden" in message:
+        return "Upstream provider returned 403 Forbidden."
+    if "DataNotLoadedError" in message or "not been loaded" in message:
+        return "Upstream timing data is not loaded yet."
+    return message
 
 
 def provider_is_configured(provider: EventProvider) -> bool:
