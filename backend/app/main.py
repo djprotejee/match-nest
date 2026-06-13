@@ -104,6 +104,9 @@ app.add_middleware(
 )
 
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
+_BACKGROUND_REFRESH_LOCK = threading.Lock()
+_BACKGROUND_REFRESH_RUNNING = False
+_BACKGROUND_REFRESH_LAST_RESULT: dict | None = None
 
 
 class FollowUpdate(BaseModel):
@@ -238,6 +241,50 @@ def warmup_ranges(now: datetime, month_count: int = 7) -> list[tuple[datetime, d
             end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
         ranges.append((start, end))
     return ranges
+
+
+def run_background_refresh_job() -> None:
+    global _BACKGROUND_REFRESH_LAST_RESULT, _BACKGROUND_REFRESH_RUNNING
+    now = datetime.now(timezone.utc)
+    warmed: list[str] = []
+    errors: list[str] = []
+    user_ids = [None]
+    try:
+        user_ids.extend(list_user_ids())
+    except Exception as exc:
+        errors.append(f"users: {exc}")
+
+    try:
+        for user_id in user_ids:
+            preferences = preferences_for_user(user_id)
+            for start, end in warmup_ranges(now):
+                try:
+                    provider_results(start, end, preferences)
+                    warmed.append(f"{user_id or 'default'}:{start.date()}:{end.date()}")
+                except Exception as exc:
+                    errors.append(f"{user_id or 'default'}:{start.date()}:{exc}")
+        notification_result = dispatch_due_notifications()
+        _BACKGROUND_REFRESH_LAST_RESULT = {
+            "ok": not errors,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "warmed": warmed,
+            "errors": errors,
+            "notifications": notification_result,
+        }
+    finally:
+        with _BACKGROUND_REFRESH_LOCK:
+            _BACKGROUND_REFRESH_RUNNING = False
+
+
+def start_background_refresh_job() -> dict:
+    global _BACKGROUND_REFRESH_RUNNING
+    with _BACKGROUND_REFRESH_LOCK:
+        if _BACKGROUND_REFRESH_RUNNING:
+            return {"accepted": False, "running": True, "last_result": _BACKGROUND_REFRESH_LAST_RESULT}
+        _BACKGROUND_REFRESH_RUNNING = True
+    thread = threading.Thread(target=run_background_refresh_job, daemon=True)
+    thread.start()
+    return {"accepted": True, "running": True, "last_result": _BACKGROUND_REFRESH_LAST_RESULT}
 
 
 def build_verification_url(request: Request, token: str) -> str:
@@ -544,27 +591,9 @@ def run_notifications(_actor: UserAccount | None = Depends(require_user_or_dispa
 
 @app.post("/background/refresh")
 def background_refresh(_actor: UserAccount | None = Depends(require_user_or_dispatch_token)) -> dict:
-    now = datetime.now(timezone.utc)
-    warmed: list[str] = []
-    errors: list[str] = []
-    user_ids = [None]
-    # Warm all signed-in preference sets so every device for the same account
-    # reads persisted events/settings instead of starting a provider refresh.
-    try:
-        user_ids.extend(list_user_ids())
-    except Exception as exc:
-        errors.append(f"users: {exc}")
-
-    for user_id in user_ids:
-        preferences = preferences_for_user(user_id)
-        for start, end in warmup_ranges(now):
-            try:
-                provider_results(start, end, preferences)
-                warmed.append(f"{user_id or 'default'}:{start.date()}:{end.date()}")
-            except Exception as exc:
-                errors.append(f"{user_id or 'default'}:{start.date()}:{exc}")
-    notification_result = dispatch_due_notifications()
-    return {"ok": not errors, "warmed": warmed, "errors": errors, "notifications": notification_result}
+    # Cloudflare should only kick the refresh and get a fast response. Provider
+    # refreshes continue inside the Render process after the HTTP request ends.
+    return {"ok": True, **start_background_refresh_job()}
 
 
 @app.post("/auth/register")
