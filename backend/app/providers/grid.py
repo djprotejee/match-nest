@@ -20,7 +20,7 @@ from ..storage import (
 
 GRID_PROVIDER = "grid"
 GRID_API_URL = "https://api.grid.gg/file-download/end-state/grid/series/{series_id}"
-GRID_DISCOVERY_TIMEOUT_SECONDS = 12
+GRID_DISCOVERY_TIMEOUT_SECONDS = 4
 GRID_DISCOVERY_MIN_SCORE = 78
 GRID_DISCOVERY_NEGATIVE_TTL = timedelta(hours=6)
 
