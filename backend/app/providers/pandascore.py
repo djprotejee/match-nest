@@ -260,14 +260,14 @@ def cs2_games_section(item: dict) -> dict | None:
 
 
 def cs2_stats_availability_section(item: dict) -> dict | None:
-    if not item.get("detailed_stats"):
-        return None
+    coverage = "available" if item.get("detailed_stats") else "not advertised by PandaScore"
     return {
         "title": "Stats coverage",
-        "columns": ["Provider", "Note"],
+        "columns": ["Provider", "Coverage", "Note"],
         "rows": [
             [
                 "GRID",
+                coverage,
                 cs2_grid_stats_note(),
             ]
         ],
@@ -279,8 +279,8 @@ def cs2_grid_stats_note() -> str:
         return "GRID token and manual series bindings are configured. Open a mapped match to load cached GRID end-state stats."
     if os.getenv("GRID_API_TOKEN", "").strip():
         return (
-            "GRID token is configured. Detailed map and player stats still need a GRID match binding "
-            "through GRID_SERIES_IDS."
+            "GRID token is configured, but this MatchNest event is not linked to a GRID series id yet. "
+            "Add this event id to GRID_SERIES_IDS when you know the GRID series id."
         )
     return "GRID token is not configured. Add GRID_API_TOKEN to enable the future CS2 stats provider."
 
