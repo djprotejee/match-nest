@@ -1950,6 +1950,28 @@ function EventCard(props: {
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const shouldHideResult = event.result_hidden && !event.result_summary;
 
+  useEffect(() => {
+    if (!detailsOpen || !details || !props.revealed) {
+      return;
+    }
+    void loadDetails(true);
+  }, [props.revealed]);
+
+  async function loadDetails(revealSpoilers = props.revealed) {
+    if (event.sport !== "formula" && event.sport !== "cs2" && event.sport !== "football") {
+      return;
+    }
+    setDetailsLoading(true);
+    setDetailsError(null);
+    try {
+      setDetails(await fetchEventDetails(event.id, revealSpoilers));
+    } catch (error) {
+      setDetailsError(readErrorMessage(error));
+    } finally {
+      setDetailsLoading(false);
+    }
+  }
+
   async function toggleDetails() {
     if (detailsOpen) {
       setDetailsOpen(false);
@@ -1959,15 +1981,7 @@ function EventCard(props: {
     if (details || (event.sport !== "formula" && event.sport !== "cs2" && event.sport !== "football")) {
       return;
     }
-    setDetailsLoading(true);
-    setDetailsError(null);
-    try {
-      setDetails(await fetchEventDetails(event.id));
-    } catch (error) {
-      setDetailsError(readErrorMessage(error));
-    } finally {
-      setDetailsLoading(false);
-    }
+    await loadDetails(props.revealed);
   }
 
   return (

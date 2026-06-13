@@ -100,8 +100,10 @@ export async function deleteEntity(entityId: string): Promise<{ ok: boolean; res
   return response.json() as Promise<{ ok: boolean; result: string }>;
 }
 
-export async function fetchEventDetails(eventId: string): Promise<EventDetails> {
-  return getJson<EventDetails>(apiUrl(`events/${eventId}/details`));
+export async function fetchEventDetails(eventId: string, revealSpoilers = false): Promise<EventDetails> {
+  const url = apiUrl(`events/${eventId}/details`);
+  url.searchParams.set("reveal_spoilers", revealSpoilers ? "true" : "false");
+  return getJson<EventDetails>(url);
 }
 
 export async function fetchEvent(eventId: string, revealSpoilers = false): Promise<MatchEvent> {
