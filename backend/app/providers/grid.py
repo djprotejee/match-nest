@@ -5,7 +5,7 @@ import os
 from typing import Any
 from urllib.request import Request, urlopen
 
-from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
+from ..storage import get_cached_provider_payload, get_event_provider_binding, upsert_provider_payload_cache
 
 
 GRID_PROVIDER = "grid"
@@ -36,7 +36,11 @@ def parse_grid_series_ids(value: str | None) -> dict[str, str]:
 
 
 def grid_series_id_for_event(event_id: str) -> str | None:
-    return parse_grid_series_ids(os.getenv("GRID_SERIES_IDS")).get(event_id)
+    return get_event_provider_binding(event_id, GRID_PROVIDER, "series_id") or parse_grid_series_ids(os.getenv("GRID_SERIES_IDS")).get(event_id)
+
+
+def grid_end_state_cache_key(series_id: str) -> str:
+    return f"end-state:grid:series:{series_id}"
 
 
 class GridClient:
@@ -50,7 +54,7 @@ class GridClient:
 
     def end_state(self, series_id: str) -> tuple[Any | None, str | None, bool]:
         """Return GRID end-state payload, error text, and whether cache was used."""
-        cache_key = f"end-state:grid:series:{series_id}"
+        cache_key = grid_end_state_cache_key(series_id)
         cached = get_cached_provider_payload(GRID_PROVIDER, cache_key)
         if not self.configured:
             return cached, "GRID_API_TOKEN is not configured.", cached is not None
@@ -77,7 +81,7 @@ def grid_cs2_section(event_id: str) -> dict | None:
         return None
 
     payload, error, from_cache = GridClient().end_state(series_id)
-    rows = [["Series ID", series_id]]
+    rows = [["Series ID", series_id], ["Raw cache", f"{GRID_PROVIDER}:{grid_end_state_cache_key(series_id)}"]]
     if from_cache:
         rows.append(["Cache", "Using cached GRID end-state payload"])
     if error:
@@ -113,4 +117,3 @@ def grid_payload_overview_rows(payload: Any) -> list[list[str]]:
 def trim_value(value: Any) -> str:
     text = str(value)
     return text if len(text) <= 120 else f"{text[:117]}..."
-

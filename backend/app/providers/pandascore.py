@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .base import EventProvider
-from .grid import grid_cs2_section
+from .grid import GRID_PROVIDER, grid_cs2_section, grid_end_state_cache_key, grid_series_id_for_event
 from .hltv import find_hltv_team_rank, hltv_rankings
 from ..models import Event, EventStatus, Sport
 from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
@@ -182,7 +182,16 @@ def cs2_match_details(event_id: str, item: dict) -> dict:
         "summary": cs2_match_summary(item, title),
         "facts": facts,
         "sections": [section for section in sections if section is not None],
+        "raw_payload_cache_keys": cs2_raw_payload_cache_keys(event_id),
     }
+
+
+def cs2_raw_payload_cache_keys(event_id: str) -> list[str]:
+    keys = []
+    series_id = grid_series_id_for_event(event_id)
+    if series_id:
+        keys.append(f"{GRID_PROVIDER}:{grid_end_state_cache_key(series_id)}")
+    return keys
 
 
 def cs2_match_title(item: dict) -> str:

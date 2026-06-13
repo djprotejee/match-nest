@@ -17,6 +17,7 @@ from app.storage import (
     get_cached_event_details,
     get_cached_provider_payload,
     get_entity_record,
+    get_event_provider_binding,
     list_events,
     mark_provider_fetch,
     preferences_for_user,
@@ -28,6 +29,7 @@ from app.storage import (
     translate_sql_for_postgres,
     update_custom_entity,
     upsert_event_details_cache,
+    upsert_event_provider_binding,
     upsert_provider_payload_cache,
     upsert_events,
     user_for_session,
@@ -103,6 +105,32 @@ class StorageTests(unittest.TestCase):
 
                 self.assertEqual(get_cached_provider_payload("grid", "end-state:grid:series:2589176"), payload)
                 self.assertIsNotNone(provider_payload_state("grid", "end-state:grid:series:2589176").fetched_at)
+
+    def test_event_provider_binding_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
+                event = Event(
+                    id="cs2-1513136",
+                    title="Natus Vincere vs TheMongolz",
+                    sport=Sport.CS2,
+                    starts_at=datetime(2026, 6, 11, 9, 0, tzinfo=timezone.utc),
+                    status=EventStatus.PAST,
+                    entity_ids=["navi_cs2"],
+                    source="pandascore",
+                    competition="IEM Cologne Major 2026",
+                )
+
+                upsert_events([event])
+                upsert_event_provider_binding(
+                    "cs2-1513136",
+                    "grid",
+                    "series_id",
+                    "2589176",
+                    confidence=0.98,
+                    metadata={"matched_by": "team-time-tournament"},
+                )
+
+                self.assertEqual(get_event_provider_binding("cs2-1513136", "grid", "series_id"), "2589176")
 
     def test_delete_stale_events_for_source_keeps_current_provider_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

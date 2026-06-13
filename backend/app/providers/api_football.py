@@ -153,26 +153,31 @@ class ApiFootballProvider(EventProvider):
         fixture_id = parse_api_football_event_id(event_id)
         if fixture_id is None or not self.token:
             return None
-        fixture_payload = self._cached_request("fixtures", {"id": str(fixture_id)}, API_FOOTBALL_DETAILS_CACHE_TTL)
+        fixture_params = {"id": str(fixture_id)}
+        fixture_payload = self._cached_request("fixtures", fixture_params, API_FOOTBALL_DETAILS_CACHE_TTL)
         fixtures = fixture_payload.get("response") or []
         if not fixtures:
             return None
         fixture = fixtures[0]
         stable_ttl = API_FOOTBALL_STABLE_DETAILS_CACHE_TTL if api_football_status(fixture.get("fixture", {}).get("status", {}), datetime.now(timezone.utc)) == EventStatus.PAST else API_FOOTBALL_DETAILS_CACHE_TTL
+        detail_requests = {
+            "events": ("fixtures/events", {"fixture": str(fixture_id)}),
+            "lineups": ("fixtures/lineups", {"fixture": str(fixture_id)}),
+            "statistics": ("fixtures/statistics", {"fixture": str(fixture_id)}),
+            "players": ("fixtures/players", {"fixture": str(fixture_id)}),
+        }
         detail_payloads = {
-            "events": self._cached_request("fixtures/events", {"fixture": str(fixture_id)}, stable_ttl),
-            "lineups": self._cached_request("fixtures/lineups", {"fixture": str(fixture_id)}, stable_ttl),
-            "statistics": self._cached_request("fixtures/statistics", {"fixture": str(fixture_id)}, stable_ttl),
-            "players": self._cached_request("fixtures/players", {"fixture": str(fixture_id)}, stable_ttl),
+            name: self._cached_request(endpoint, params, stable_ttl)
+            for name, (endpoint, params) in detail_requests.items()
         }
         league = fixture.get("league") or {}
         if league.get("id") and league.get("season"):
-            detail_payloads["standings"] = self._cached_request(
-                "standings",
-                {"league": str(league["id"]), "season": str(league["season"])},
-                API_FOOTBALL_STABLE_DETAILS_CACHE_TTL,
-            )
-        return api_football_details_payload(event_id, fixture, detail_payloads)
+            detail_requests["standings"] = ("standings", {"league": str(league["id"]), "season": str(league["season"])})
+            endpoint, params = detail_requests["standings"]
+            detail_payloads["standings"] = self._cached_request(endpoint, params, API_FOOTBALL_STABLE_DETAILS_CACHE_TTL)
+        raw_cache_keys = [api_football_cache_key("fixtures", fixture_params)]
+        raw_cache_keys.extend(api_football_cache_key(endpoint, params) for endpoint, params in detail_requests.values())
+        return api_football_details_payload(event_id, fixture, detail_payloads, raw_cache_keys)
 
 
 def api_football_team_entities() -> dict[str, int]:
@@ -290,7 +295,12 @@ def parse_api_football_event_id(event_id: str) -> int | None:
         return None
 
 
-def api_football_details_payload(event_id: str, fixture: dict, detail_payloads: dict[str, dict]) -> dict:
+def api_football_details_payload(
+    event_id: str,
+    fixture: dict,
+    detail_payloads: dict[str, dict],
+    raw_cache_keys: list[str] | None = None,
+) -> dict:
     teams = fixture.get("teams") or {}
     home = teams.get("home") or {}
     away = teams.get("away") or {}
@@ -323,6 +333,7 @@ def api_football_details_payload(event_id: str, fixture: dict, detail_payloads: 
         "summary": summary,
         "facts": facts,
         "sections": [section for section in sections if section is not None],
+        "raw_payload_cache_keys": [f"api-football:{key}" for key in raw_cache_keys or []],
     }
 
 

@@ -372,6 +372,22 @@ def init_db(connection: sqlite3.Connection | PostgresConnection) -> None:
         )
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS event_provider_bindings (
+            event_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            binding_type TEXT NOT NULL,
+            binding_value TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (event_id, provider, binding_type),
+            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+        )
+        """
+    )
     sync_seed_entities(connection)
     connection.commit()
 
@@ -1067,6 +1083,62 @@ def provider_bindings_for(provider: str, binding_type: str | None = None) -> dic
                 continue
             output.setdefault(entity_id, []).append(binding.value)
     return output
+
+
+def get_event_provider_binding(event_id: str, provider: str, binding_type: str) -> str | None:
+    connection = connect()
+    try:
+        row = connection.execute(
+            """
+            SELECT binding_value
+            FROM event_provider_bindings
+            WHERE event_id = ? AND provider = ? AND binding_type = ?
+            """,
+            (event_id, provider, binding_type),
+        ).fetchone()
+    finally:
+        connection.close()
+    return str(row["binding_value"]) if row else None
+
+
+def upsert_event_provider_binding(
+    event_id: str,
+    provider: str,
+    binding_type: str,
+    binding_value: str,
+    confidence: float = 1.0,
+    metadata: dict | None = None,
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    connection = connect()
+    try:
+        connection.execute(
+            """
+            INSERT INTO event_provider_bindings (
+                event_id, provider, binding_type, binding_value,
+                confidence, metadata_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(event_id, provider, binding_type) DO UPDATE SET
+                binding_value = excluded.binding_value,
+                confidence = excluded.confidence,
+                metadata_json = excluded.metadata_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                event_id,
+                provider,
+                binding_type,
+                binding_value,
+                confidence,
+                json.dumps(metadata or {}, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def upsert_events(events: Iterable[Event]) -> None:

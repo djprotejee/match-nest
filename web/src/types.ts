@@ -63,12 +63,22 @@ export interface EventDetailsSection {
 }
 
 export interface EventDetails {
+  version?: number;
   event_id: string;
   sport: Sport;
   source: string;
   summary: string;
   facts: Array<{ label: string; value: string }>;
   sections: EventDetailsSection[];
+  score?: EventDetailsSection | null;
+  lineups?: Array<Record<string, string>>;
+  timeline_events?: Array<Record<string, string>>;
+  team_stats?: Array<Record<string, string>>;
+  player_stats?: Array<Record<string, string>>;
+  standings_snapshot?: Array<Record<string, string>>;
+  bracket_snapshot?: Array<Record<string, string>>;
+  raw_provider_payload?: unknown;
+  raw_payload_cache_keys?: string[];
 }
 
 export interface AuthUser {

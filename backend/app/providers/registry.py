@@ -19,6 +19,7 @@ from .f4_calendar import F4CalendarProvider
 from .football_data import FootballDataProvider, football_competition_entities
 from .thesportsdb import TheSportsDBFootballProvider
 from .pandascore import PandaScoreCS2Provider
+from ..details import normalize_event_details
 from ..models import EntityKind, Event, EventStatus, F1Session, FollowLevel, Sport, UserPreferences
 from ..seed import DEFAULT_PREFERENCES, demo_events
 from ..storage import (
@@ -240,23 +241,24 @@ def fetch_event_details(event_id: str) -> dict | None:
             details = EspnFootballProvider().details(event_id, get_event(event_id))
         elif event_id.startswith("football-apifootball-"):
             details = ApiFootballProvider().details(event_id)
+        details = normalize_event_details(details)
         if details and details.get("source") != "matchnest":
             upsert_event_details_cache(event_id, str(details.get("source") or "unknown"), details)
         return details or cached
     except Exception as exc:
         if cached:
-            cached_copy = json.loads(json.dumps(cached))
+            cached_copy = normalize_event_details(json.loads(json.dumps(cached))) or json.loads(json.dumps(cached))
             cached_copy["summary"] = f"{cached_copy.get('summary', 'Cached details')} Cached because the upstream provider is temporarily unavailable."
             cached_copy.setdefault("facts", []).append({"label": "Cache", "value": f"Provider refresh failed: {detail_error_message(exc)}"})
             return cached_copy
-        return {
+        return normalize_event_details({
             "event_id": event_id,
             "sport": "formula" if event_id.startswith("f1-") else "unknown",
             "source": "matchnest",
             "summary": detail_error_summary(event_id, exc),
             "facts": [{"label": "Provider message", "value": detail_error_message(exc)}],
             "sections": [],
-        }
+        })
 
 
 def detail_error_summary(event_id: str, exc: Exception) -> str:
