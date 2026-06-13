@@ -7,7 +7,12 @@ from unittest.mock import patch
 from app.models import Event, EventStatus, F1Session, Sport
 from app.providers.api_football import ApiFootballProvider, api_football_seasons, api_football_status
 from app.providers.espn_football import EspnFootballProvider, month_keys
-from app.providers.registry import dedupe_cross_source_events, followed_football_competitions, followed_football_team_queries, provider_should_refresh
+from app.providers.registry import (
+    dedupe_cross_source_events,
+    followed_football_competitions,
+    followed_football_team_queries,
+    provider_should_refresh,
+)
 from app.providers.f4_calendar import F4CalendarProvider
 from app.providers.f1_jolpica import parse_utc_datetime
 from app.providers.football_data import (
@@ -48,6 +53,7 @@ class ProviderMappingTests(unittest.TestCase):
 
         self.assertEqual([event.title for event in events], ["Italian F4 - Monza Day 1", "Italian F4 - Monza Day 2", "Italian F4 - Monza Day 3"])
         self.assertTrue(all(event.source == "f4-calendar" for event in events))
+        self.assertEqual([event.starts_at.date().isoformat() for event in events], ["2026-06-19", "2026-06-20", "2026-06-21"])
 
     def test_football_maps_main_team_and_starred_competition(self) -> None:
         ids = football_entity_ids("Ukraine", "France", "UEFA Euro")
