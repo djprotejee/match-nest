@@ -16,7 +16,7 @@ from app.providers.registry import (
     provider_should_refresh,
 )
 from app.providers.f4_calendar import F4CalendarProvider
-from app.providers.f1_jolpica import parse_utc_datetime
+from app.providers.f1_jolpica import f1_constructor_standings_section, f1_driver_standings_section, parse_utc_datetime
 from app.providers.football_data import (
     dedupe_matches,
     find_team_id,
@@ -64,6 +64,53 @@ class ProviderMappingTests(unittest.TestCase):
         self.assertNotIn("403", summary)
         self.assertNotIn("Forbidden", summary)
         self.assertIn("not available yet", summary)
+
+    def test_f1_standings_sections_map_driver_and_constructor_tables(self) -> None:
+        driver_payload = {
+            "MRData": {
+                "StandingsTable": {
+                    "StandingsLists": [
+                        {
+                            "DriverStandings": [
+                                {
+                                    "position": "1",
+                                    "points": "142",
+                                    "wins": "4",
+                                    "Driver": {"code": "LEC", "permanentNumber": "16", "givenName": "Charles", "familyName": "Leclerc"},
+                                    "Constructors": [{"name": "Ferrari"}],
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+        constructor_payload = {
+            "MRData": {
+                "StandingsTable": {
+                    "StandingsLists": [
+                        {
+                            "ConstructorStandings": [
+                                {
+                                    "position": "1",
+                                    "points": "244",
+                                    "wins": "5",
+                                    "Constructor": {"name": "Ferrari", "nationality": "Italian"},
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+
+        driver_section = f1_driver_standings_section(driver_payload)
+        constructor_section = f1_constructor_standings_section(constructor_payload)
+
+        self.assertEqual(driver_section["title"], "Championship standings")
+        self.assertEqual(driver_section["rows"][0][1], "LEC")
+        self.assertEqual(constructor_section["title"], "Constructor standings")
+        self.assertEqual(constructor_section["rows"][0][1], "Ferrari")
 
     def test_football_maps_main_team_and_starred_competition(self) -> None:
         ids = football_entity_ids("Ukraine", "France", "UEFA Euro")

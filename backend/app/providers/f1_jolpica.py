@@ -128,6 +128,27 @@ class JolpicaF1Provider(EventProvider):
         results = race.get("Results", [])
         fastest = fastest_lap_result(results)
         strategies = fastf1_strategy_by_driver(season, round_id, "R")
+        sections = [
+            {
+                "title": "Race classification",
+                "columns": [
+                    "Pos",
+                    "DRV",
+                    "No",
+                    "Driver",
+                    "Team",
+                    "Grid",
+                    "Laps",
+                    "Time / status",
+                    "Points",
+                    "Fastest lap",
+                    "Tyre stints",
+                    "Pit / changes",
+                ],
+                "rows": [race_result_row(item, strategies) for item in results],
+            }
+        ]
+        sections.extend(f1_standings_sections(self.base_url, season, round_id))
 
         return {
             "event_id": f"f1-{season}-{round_id}-race",
@@ -135,26 +156,7 @@ class JolpicaF1Provider(EventProvider):
             "source": "jolpica",
             "summary": race_summary(race),
             "facts": race_facts(race, fastest),
-            "sections": [
-                {
-                    "title": "Race classification",
-                    "columns": [
-                        "Pos",
-                        "DRV",
-                        "No",
-                        "Driver",
-                        "Team",
-                        "Grid",
-                        "Laps",
-                        "Time / status",
-                        "Points",
-                        "Fastest lap",
-                        "Tyre stints",
-                        "Pit / changes",
-                    ],
-                    "rows": [race_result_row(item, strategies) for item in results],
-                }
-            ],
+            "sections": sections,
         }
 
     def _qualifying_details(self, season: str, round_id: str) -> dict | None:
@@ -168,6 +170,14 @@ class JolpicaF1Provider(EventProvider):
                 "Qualifying classification",
             )
         results = race.get("QualifyingResults", [])
+        sections = [
+            {
+                "title": "Qualifying classification",
+                "columns": ["Pos", "DRV", "No", "Driver", "Team", "Q1", "Q2", "Q3"],
+                "rows": [qualifying_result_row(item) for item in results],
+            }
+        ]
+        sections.extend(f1_standings_sections(self.base_url, season, round_id))
 
         return {
             "event_id": f"f1-{season}-{round_id}-qualifying",
@@ -175,13 +185,7 @@ class JolpicaF1Provider(EventProvider):
             "source": "jolpica",
             "summary": race_summary(race),
             "facts": race_facts(race, None),
-            "sections": [
-                {
-                    "title": "Qualifying classification",
-                    "columns": ["Pos", "DRV", "No", "Driver", "Team", "Q1", "Q2", "Q3"],
-                    "rows": [qualifying_result_row(item) for item in results],
-                }
-            ],
+            "sections": sections,
         }
 
     def _sprint_details(self, season: str, round_id: str) -> dict | None:
@@ -191,6 +195,27 @@ class JolpicaF1Provider(EventProvider):
         results = race.get("SprintResults", [])
         fastest = fastest_lap_result(results)
         strategies = fastf1_strategy_by_driver(season, round_id, "S")
+        sections = [
+            {
+                "title": "Sprint classification",
+                "columns": [
+                    "Pos",
+                    "DRV",
+                    "No",
+                    "Driver",
+                    "Team",
+                    "Grid",
+                    "Laps",
+                    "Time / status",
+                    "Points",
+                    "Fastest lap",
+                    "Tyre stints",
+                    "Pit / changes",
+                ],
+                "rows": [race_result_row(item, strategies) for item in results],
+            }
+        ]
+        sections.extend(f1_standings_sections(self.base_url, season, round_id))
 
         return {
             "event_id": f"f1-{season}-{round_id}-sprint",
@@ -198,26 +223,7 @@ class JolpicaF1Provider(EventProvider):
             "source": "jolpica",
             "summary": race_summary(race),
             "facts": race_facts(race, fastest),
-            "sections": [
-                {
-                    "title": "Sprint classification",
-                    "columns": [
-                        "Pos",
-                        "DRV",
-                        "No",
-                        "Driver",
-                        "Team",
-                        "Grid",
-                        "Laps",
-                        "Time / status",
-                        "Points",
-                        "Fastest lap",
-                        "Tyre stints",
-                        "Pit / changes",
-                    ],
-                    "rows": [race_result_row(item, strategies) for item in results],
-                }
-            ],
+            "sections": sections,
         }
 
     def _alpha_session_details(
@@ -353,6 +359,72 @@ def fetch_json(url: str) -> dict:
 def first_race(payload: dict) -> dict | None:
     races = payload.get("MRData", {}).get("RaceTable", {}).get("Races", [])
     return races[0] if races else None
+
+
+def f1_standings_sections(base_url: str, season: str, round_id: str) -> list[dict]:
+    sections = []
+    driver_section = f1_driver_standings_section(fetch_json(f"{base_url}/{season}/{round_id}/driverStandings.json"))
+    constructor_section = f1_constructor_standings_section(fetch_json(f"{base_url}/{season}/{round_id}/constructorStandings.json"))
+    if driver_section:
+        sections.append(driver_section)
+    if constructor_section:
+        sections.append(constructor_section)
+    return sections
+
+
+def f1_driver_standings_section(payload: dict) -> dict | None:
+    standings = first_standings_list(payload).get("DriverStandings", [])
+    if not standings:
+        return None
+    rows = []
+    for item in standings:
+        driver = item.get("Driver") or {}
+        constructors = item.get("Constructors") or []
+        constructor = constructors[0] if constructors else {}
+        rows.append(
+            [
+                str(item.get("position") or "-"),
+                str(driver.get("code") or "-"),
+                str(driver.get("permanentNumber") or "-"),
+                f"{driver.get('givenName', '')} {driver.get('familyName', '')}".strip() or "-",
+                str(constructor.get("name") or "-"),
+                str(item.get("points") or "-"),
+                str(item.get("wins") or "0"),
+            ]
+        )
+    return {
+        "title": "Championship standings",
+        "columns": ["Pos", "DRV", "No", "Driver", "Team", "Points", "Wins"],
+        "rows": rows,
+    }
+
+
+def f1_constructor_standings_section(payload: dict) -> dict | None:
+    standings = first_standings_list(payload).get("ConstructorStandings", [])
+    if not standings:
+        return None
+    rows = []
+    for item in standings:
+        constructor = item.get("Constructor") or {}
+        rows.append(
+            [
+                str(item.get("position") or "-"),
+                str(constructor.get("name") or "-"),
+                str(constructor.get("nationality") or "-"),
+                str(item.get("points") or "-"),
+                str(item.get("wins") or "0"),
+            ]
+        )
+    return {
+        "title": "Constructor standings",
+        "columns": ["Pos", "Constructor", "Nationality", "Points", "Wins"],
+        "rows": rows,
+    }
+
+
+def first_standings_list(payload: dict) -> dict:
+    lists = payload.get("MRData", {}).get("StandingsTable", {}).get("StandingsLists", [])
+    return lists[0] if lists else {}
 
 
 def parse_f1_event_id(event_id: str) -> tuple[str, str, str] | None:
