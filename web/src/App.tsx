@@ -51,6 +51,7 @@ import {
   type FollowCategory,
   type ImportanceMode,
   type NotifyPreset,
+  type SpoilerMode,
   STORAGE_KEY,
   type WatchStatus,
   loadAppState,
@@ -171,16 +172,16 @@ export function App() {
     if (currentUser && accountSettingsLoaded) {
       void loadTimeline();
     }
-  }, [range, feedMode, state.hideSpoilers, state.customFeedLevels, currentUser, accountSettingsLoaded]);
+  }, [range, feedMode, state.hideSpoilers, state.spoilerMode, state.spoilerSports, state.spoilerLevels, state.spoilerEntities, state.customFeedLevels, currentUser, accountSettingsLoaded]);
 
   useEffect(() => {
     if (currentUser && accountSettingsLoaded) {
       void loadCalendar();
     }
-  }, [monthCursor, feedMode, state.hideSpoilers, state.customFeedLevels, currentUser, accountSettingsLoaded]);
+  }, [monthCursor, feedMode, state.hideSpoilers, state.spoilerMode, state.spoilerSports, state.spoilerLevels, state.spoilerEntities, state.customFeedLevels, currentUser, accountSettingsLoaded]);
 
   async function loadTimeline() {
-    const cacheKey = timelineCacheKey(range, state.hideSpoilers, feedMode, state.customFeedLevels);
+    const cacheKey = timelineCacheKey(range, state, feedMode, state.customFeedLevels);
     const cached = loadCachedData(cacheKey);
     if (cached && timeline.length === 0) {
       setTimeline(cached.timeline);
@@ -342,7 +343,7 @@ export function App() {
   }
 
   function scheduleTimelineRetry() {
-    const retryKey = timelineCacheKey(range, state.hideSpoilers, feedMode, state.customFeedLevels);
+    const retryKey = timelineCacheKey(range, state, feedMode, state.customFeedLevels);
     const count = timelineRetryCountsRef.current[retryKey] || 0;
     if (timelineRetryRef.current !== null || count >= 6) {
       return;
@@ -1541,10 +1542,11 @@ function SettingsScreen(props: {
       <section className="settings-card">
         <h3>Spoilers</h3>
         <ToggleRow
-          label="Hide past scores by default"
+          label="Spoiler-safe mode"
           enabled={props.state.hideSpoilers}
           onChange={(value) => props.setState({ hideSpoilers: value })}
         />
+        <SpoilerPolicyControls state={props.state} setState={props.setState} entities={props.entities} categories={props.categories} />
       </section>
 
       <section className="settings-card">
@@ -1766,6 +1768,74 @@ function NotificationSettingsPanel({ entities, categories }: { entities: EntityI
         ))}
         {settings && !settings.rules.length ? <div className="empty-state compact">No notification rules yet.</div> : null}
       </div>
+    </div>
+  );
+}
+
+function SpoilerPolicyControls({
+  state,
+  setState,
+  entities,
+  categories,
+}: {
+  state: AppState;
+  setState: (patch: Partial<AppState>) => void;
+  entities: EntityItem[];
+  categories: FollowCategory[];
+}) {
+  const spoilerMode = state.spoilerMode || "all";
+  const followedEntities = entities.filter((entity) => entity.follow !== "explore" && entity.follow !== "hidden");
+
+  function toggleSpoilerSport(sport: Sport) {
+    setState({ spoilerSports: { ...state.spoilerSports, [sport]: !state.spoilerSports[sport] } });
+  }
+
+  function toggleSpoilerLevel(level: FollowLevel) {
+    setState({ spoilerLevels: { ...state.spoilerLevels, [level]: !state.spoilerLevels[level] } });
+  }
+
+  function toggleSpoilerEntity(entityId: string) {
+    setState({ spoilerEntities: { ...state.spoilerEntities, [entityId]: !state.spoilerEntities[entityId] } });
+  }
+
+  return (
+    <div className="spoiler-policy">
+      <label htmlFor="spoiler-mode">Spoiler mode</label>
+      <select
+        id="spoiler-mode"
+        value={spoilerMode}
+        onChange={(event) => setState({ spoilerMode: event.target.value as SpoilerMode, hideSpoilers: event.target.value !== "off" })}
+      >
+        <option value="all">Hide all scores</option>
+        <option value="past">Hide past only</option>
+        <option value="past_live">Hide past and live</option>
+        <option value="custom">Custom sports, categories, teams</option>
+        <option value="off">Show scores</option>
+      </select>
+
+      {spoilerMode === "custom" ? (
+        <div className="spoiler-custom-grid">
+          <div>
+            <strong>Sports</strong>
+            {SPORTS.map((sport) => (
+              <ToggleRow key={sport} label={sportLabel(sport)} enabled={Boolean(state.spoilerSports[sport])} onChange={() => toggleSpoilerSport(sport)} />
+            ))}
+          </div>
+          <div>
+            <strong>Categories</strong>
+            {categories.map((category) => (
+              <ToggleRow key={category.id} label={category.name} enabled={Boolean(state.spoilerLevels[category.id])} onChange={() => toggleSpoilerLevel(category.id)} />
+            ))}
+          </div>
+          <div>
+            <strong>Teams / tournaments</strong>
+            {followedEntities.slice(0, 20).map((entity) => (
+              <ToggleRow key={entity.id} label={entity.name} enabled={Boolean(state.spoilerEntities[entity.id])} onChange={() => toggleSpoilerEntity(entity.id)} />
+            ))}
+            {followedEntities.length > 20 ? <p>Showing first 20 followed entities. Use categories for broad rules.</p> : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2327,7 +2397,7 @@ function NavButton(props: { icon: React.ReactNode; label: string; active: boolea
 }
 
 function loadInitialTimelineCache(state: AppState): { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null {
-  return loadCachedData(timelineCacheKey("week", state.hideSpoilers, "main", state.customFeedLevels));
+  return loadCachedData(timelineCacheKey("week", state, "main", state.customFeedLevels));
 }
 
 function loadInitialCalendarCache(state: AppState): DayGroup[] | null {
@@ -2348,12 +2418,32 @@ function loadCachedData(cacheKey: string): { at: number; timeline: DayGroup[]; e
   }
 }
 
-function timelineCacheKey(range: RangeFilter, hideSpoilers: boolean, feedMode: FeedMode, customFeedLevels: FollowLevel[]): string {
-  return `${CACHE_PREFIX}${range}.${feedMode}.${customFeedLevels.join("_")}.${hideSpoilers ? "hidden" : "revealed"}`;
+function timelineCacheKey(range: RangeFilter, state: AppState, feedMode: FeedMode, customFeedLevels: FollowLevel[]): string {
+  return `${CACHE_PREFIX}${range}.${feedMode}.${customFeedLevels.join("_")}.${spoilerCacheSignature(state)}`;
 }
 
 function calendarCacheKey(year: number, month: number, levels: FollowLevel[] = []): string {
   return `${CALENDAR_CACHE_PREFIX}${year}-${String(month).padStart(2, "0")}.${levels.join("_") || "default"}`;
+}
+
+function spoilerCacheSignature(state: AppState): string {
+  if (!state.hideSpoilers || state.spoilerMode === "off") {
+    return "spoilers-off";
+  }
+  return [
+    state.spoilerMode || "all",
+    objectSignature(state.spoilerSports),
+    objectSignature(state.spoilerLevels),
+    objectSignature(state.spoilerEntities),
+  ].join(".");
+}
+
+function objectSignature(value: Record<string, unknown> | undefined): string {
+  return Object.entries(value || {})
+    .filter(([, enabled]) => Boolean(enabled))
+    .map(([key]) => key)
+    .sort()
+    .join("_") || "none";
 }
 
 function mergeAccountSettings(current: AppState, settings: {

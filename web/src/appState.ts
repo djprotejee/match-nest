@@ -5,6 +5,7 @@ export type FeedMode = "main" | "starred" | "custom";
 export type ImportanceMode = "all" | "main" | "significant";
 export type WatchStatus = "none" | "will_watch" | "watching_live" | "watched" | "skip";
 export type NotifyPreset = "start" | "15m" | "1h" | "morning";
+export type SpoilerMode = "all" | "past" | "past_live" | "custom" | "off";
 
 export interface FollowCategory {
   id: FollowLevel;
@@ -23,6 +24,10 @@ export interface AppState {
   f1Sessions: Record<string, boolean>;
   notify: Record<NotifyPreset, boolean>;
   hideSpoilers: boolean;
+  spoilerMode: SpoilerMode;
+  spoilerSports: Partial<Record<string, boolean>>;
+  spoilerLevels: Record<FollowLevel, boolean>;
+  spoilerEntities: Record<string, boolean>;
   apiUrl: string;
 }
 
@@ -58,6 +63,10 @@ export const DEFAULT_STATE: AppState = {
     morning: false,
   },
   hideSpoilers: true,
+  spoilerMode: "all",
+  spoilerSports: { formula: true, cs2: true, football: true },
+  spoilerLevels: {},
+  spoilerEntities: {},
   apiUrl: apiBaseUrl(),
 };
 

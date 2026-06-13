@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime
 
-from app.models import Event, EventStatus, F1Session, FollowLevel, KYIV_TZ, Sport
+from app.models import Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserPreferences
 from app.seed import DEFAULT_PREFERENCES, demo_events
 from app.service import filter_events, month_range, serialize_event, visible_follow_level
 
@@ -38,7 +38,7 @@ class ServiceTests(unittest.TestCase):
             id="live-score",
             title="NAVI vs TheMongolz",
             sport=Sport.CS2,
-            starts_at=self.now,
+            starts_at=datetime.now(KYIV_TZ),
             status=EventStatus.LIVE,
             entity_ids=["navi"],
             source="pandascore",
@@ -53,6 +53,46 @@ class ServiceTests(unittest.TestCase):
         payload = serialize_event(event, DEFAULT_PREFERENCES, reveal_spoilers=True)
         self.assertFalse(payload["result_hidden"])
         self.assertEqual(payload["result_summary"], "Barcelona 2-1 Real Madrid")
+
+    def test_past_only_spoiler_keeps_live_scores_visible(self) -> None:
+        preferences = UserPreferences(default_hide_spoilers=True, ui_state={"spoilerMode": "past"})
+        event = Event(
+            id="live-score",
+            title="NAVI vs TheMongolz",
+            sport=Sport.CS2,
+            starts_at=datetime.now(KYIV_TZ),
+            status=EventStatus.LIVE,
+            entity_ids=["navi"],
+            source="pandascore",
+            result_summary="1-1",
+        )
+
+        payload = serialize_event(event, preferences)
+
+        self.assertFalse(payload["result_hidden"])
+        self.assertEqual(payload["result_summary"], "1-1")
+
+    def test_custom_spoiler_can_target_sport_category_or_entity(self) -> None:
+        event = Event(
+            id="barca-score",
+            title="Barcelona vs Real Madrid",
+            sport=Sport.FOOTBALL,
+            starts_at=self.now,
+            status=EventStatus.PAST,
+            entity_ids=["barcelona"],
+            source="espn",
+            result_summary="2-1",
+        )
+        preferences = UserPreferences(
+            follows={"barcelona": Follow("barcelona", "main")},
+            default_hide_spoilers=True,
+            ui_state={"spoilerMode": "custom", "spoilerSports": {}, "spoilerLevels": {"main": True}, "spoilerEntities": {}},
+        )
+
+        payload = serialize_event(event, preferences)
+
+        self.assertTrue(payload["result_hidden"])
+        self.assertIsNone(payload["result_summary"])
 
     def test_calendar_supports_previous_month(self) -> None:
         start, end = month_range(2026, 5)

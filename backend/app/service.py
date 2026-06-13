@@ -113,7 +113,7 @@ def serialize_event(event: Event, preferences: UserPreferences, reveal_spoilers:
     # Spoiler mode removes the result from API responses instead of only hiding
     # it in the UI. That keeps widgets and notifications spoiler-safe too.
     hide_result = (
-        preferences.default_hide_spoilers
+        should_hide_result(event, preferences, level)
         and event.status in {EventStatus.PAST, EventStatus.LIVE, EventStatus.DELAYED}
         and event.result_summary is not None
         and not reveal_spoilers
@@ -127,6 +127,33 @@ def serialize_event(event: Event, preferences: UserPreferences, reveal_spoilers:
     payload["result_hidden"] = hide_result
     payload["result_summary"] = None if hide_result else event.result_summary
     return payload
+
+
+def should_hide_result(event: Event, preferences: UserPreferences, level: str) -> bool:
+    ui_state = preferences.ui_state or {}
+    mode = str(ui_state.get("spoilerMode") or ("all" if preferences.default_hide_spoilers else "off"))
+    if mode == "off" or not preferences.default_hide_spoilers:
+        return False
+    if mode in {"all", "past_live"}:
+        return event.status in {EventStatus.PAST, EventStatus.LIVE, EventStatus.DELAYED}
+    if mode == "past":
+        return event.status in {EventStatus.PAST, EventStatus.DELAYED}
+    if mode == "custom":
+        return custom_spoiler_match(event, ui_state, level)
+    return event.status in {EventStatus.PAST, EventStatus.LIVE, EventStatus.DELAYED}
+
+
+def custom_spoiler_match(event: Event, ui_state: dict, level: str) -> bool:
+    if event.status not in {EventStatus.PAST, EventStatus.LIVE, EventStatus.DELAYED}:
+        return False
+    sports = ui_state.get("spoilerSports") if isinstance(ui_state.get("spoilerSports"), dict) else {}
+    levels = ui_state.get("spoilerLevels") if isinstance(ui_state.get("spoilerLevels"), dict) else {}
+    entities = ui_state.get("spoilerEntities") if isinstance(ui_state.get("spoilerEntities"), dict) else {}
+    if sports.get(event.sport.value):
+        return True
+    if levels.get(level):
+        return True
+    return any(entities.get(entity_id) for entity_id in event.entity_ids)
 
 
 def group_by_day(events: Iterable[Event], preferences: UserPreferences, reveal_spoilers: bool = False) -> list[dict]:
