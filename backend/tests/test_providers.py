@@ -12,6 +12,7 @@ from app.providers.registry import (
     detail_error_summary,
     followed_football_competitions,
     followed_football_team_queries,
+    provider_refresh_ttl,
     provider_should_refresh,
 )
 from app.providers.f4_calendar import F4CalendarProvider
@@ -132,6 +133,14 @@ class ProviderMappingTests(unittest.TestCase):
                 mark_provider_fetch("FootballDataProvider", "range", "error", "HTTP 429")
 
                 self.assertTrue(provider_should_refresh("FootballDataProvider", "range"))
+
+    def test_espn_refreshes_current_window_more_often(self) -> None:
+        now = datetime.now(timezone.utc)
+
+        self.assertLess(
+            provider_refresh_ttl("EspnFootballProvider", now, now),
+            provider_refresh_ttl("EspnFootballProvider", datetime(2026, 9, 1, tzinfo=timezone.utc), datetime(2026, 10, 1, tzinfo=timezone.utc)),
+        )
 
     def test_hltv_ranking_parser_and_alias_lookup(self) -> None:
         html = """

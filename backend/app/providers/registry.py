@@ -120,7 +120,7 @@ def provider_results(
         if name != "PandaScoreCS2Provider" and end is not None and end.astimezone(timezone.utc) <= now and cached_count:
             results.append(ProviderResult(name=name, configured=True, count=cached_count))
             continue
-        if not provider_should_refresh(name, cache_key):
+        if not provider_should_refresh(name, cache_key, start, end):
             results.append(ProviderResult(name=name, configured=True, count=cached_count))
             continue
 
@@ -279,14 +279,30 @@ def provider_is_configured(provider: EventProvider) -> bool:
     return True
 
 
-def provider_should_refresh(provider_name: str, cache_key: str) -> bool:
+def provider_should_refresh(provider_name: str, cache_key: str, start: datetime | None = None, end: datetime | None = None) -> bool:
     fetch_state = provider_fetch_state(provider_name, cache_key)
     if fetch_state is None:
         return True
     if fetch_state.status != "ok":
         return True
-    ttl = PROVIDER_REFRESH_TTL.get(provider_name, timedelta(hours=1))
+    ttl = provider_refresh_ttl(provider_name, start, end)
     return datetime.now(timezone.utc) - fetch_state.fetched_at >= ttl
+
+
+def provider_refresh_ttl(provider_name: str, start: datetime | None = None, end: datetime | None = None) -> timedelta:
+    # ESPN has the most useful free football coverage for followed teams. Keep
+    # current/near-live windows fresh enough for final scores while leaving
+    # distant calendar months on a slower cadence.
+    if provider_name == "EspnFootballProvider" and range_is_near_now(start, end):
+        return timedelta(minutes=15)
+    return PROVIDER_REFRESH_TTL.get(provider_name, timedelta(hours=1))
+
+
+def range_is_near_now(start: datetime | None, end: datetime | None) -> bool:
+    if start is None or end is None:
+        return True
+    now = datetime.now(timezone.utc)
+    return start.astimezone(timezone.utc) <= now + timedelta(days=2) and end.astimezone(timezone.utc) >= now - timedelta(days=1)
 
 
 def provider_matches_event(provider_name: str, event: Event) -> bool:
