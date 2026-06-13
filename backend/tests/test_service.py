@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.models import Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserPreferences
 from app.seed import DEFAULT_PREFERENCES, demo_events
-from app.service import filter_events, month_range, serialize_event, visible_follow_level
+from app.service import effective_event_status, filter_events, month_range, serialize_event, visible_follow_level
 
 
 class ServiceTests(unittest.TestCase):
@@ -71,6 +71,46 @@ class ServiceTests(unittest.TestCase):
 
         self.assertFalse(payload["result_hidden"])
         self.assertEqual(payload["result_summary"], "1-1")
+
+    def test_live_only_spoiler_hides_live_score_and_keeps_past_score_visible(self) -> None:
+        preferences = UserPreferences(default_hide_spoilers=True, ui_state={"spoilerMode": "live"})
+        live_event = Event(
+            id="live-score",
+            title="NAVI vs TheMongolz",
+            sport=Sport.CS2,
+            starts_at=datetime.now(KYIV_TZ),
+            status=EventStatus.LIVE,
+            entity_ids=["navi"],
+            source="pandascore",
+            result_summary="1-1",
+        )
+        past_event = Event(
+            id="past-score",
+            title="Barcelona vs Real Madrid",
+            sport=Sport.FOOTBALL,
+            starts_at=self.now,
+            status=EventStatus.PAST,
+            entity_ids=["barcelona"],
+            source="espn",
+            result_summary="2-1",
+        )
+
+        self.assertTrue(serialize_event(live_event, preferences)["result_hidden"])
+        self.assertFalse(serialize_event(past_event, preferences)["result_hidden"])
+
+    def test_elapsed_f1_qualifying_is_marked_past(self) -> None:
+        event = Event(
+            id="f1-qualifying",
+            title="Barcelona Grand Prix - Qualifying",
+            sport=Sport.FORMULA,
+            starts_at=self.now,
+            status=EventStatus.UPCOMING,
+            entity_ids=["formula_1"],
+            source="jolpica",
+            session_type=F1Session.QUALIFYING,
+        )
+
+        self.assertEqual(effective_event_status(event, self.now + timedelta(hours=4)), EventStatus.PAST)
 
     def test_custom_spoiler_can_target_sport_category_or_entity(self) -> None:
         event = Event(

@@ -138,6 +138,8 @@ def should_hide_result(event: Event, preferences: UserPreferences, level: str) -
         return event.status in {EventStatus.PAST, EventStatus.LIVE, EventStatus.DELAYED}
     if mode == "past":
         return event.status in {EventStatus.PAST, EventStatus.DELAYED}
+    if mode == "live":
+        return event.status == EventStatus.LIVE
     if mode == "custom":
         return custom_spoiler_match(event, ui_state, level)
     return event.status in {EventStatus.PAST, EventStatus.LIVE, EventStatus.DELAYED}
@@ -171,6 +173,11 @@ def effective_event_status(event: Event, now: datetime | None = None) -> EventSt
         return event.status
     current = (now or datetime.now(KYIV_TZ)).astimezone(KYIV_TZ)
     starts_at = event.starts_at.astimezone(KYIV_TZ)
+    if event.sport == Sport.FORMULA and starts_at <= current:
+        if current - starts_at >= formula_session_grace(event):
+            return EventStatus.PAST
+        if event.status == EventStatus.UPCOMING:
+            return EventStatus.DELAYED
     if event.status == EventStatus.UPCOMING and starts_at <= current:
         return EventStatus.DELAYED
     if event.status == EventStatus.LIVE and current - starts_at > timedelta(hours=8):
@@ -178,6 +185,18 @@ def effective_event_status(event: Event, now: datetime | None = None) -> EventSt
     if event.status == EventStatus.DELAYED and current - starts_at > timedelta(days=2):
         return EventStatus.PAST
     return event.status
+
+
+def formula_session_grace(event: Event) -> timedelta:
+    if event.session_type == F1Session.RACE:
+        return timedelta(hours=5)
+    if event.session_type == F1Session.SPRINT:
+        return timedelta(hours=3)
+    if event.session_type == F1Session.QUALIFYING:
+        return timedelta(hours=3)
+    if event.session_type == F1Session.PRACTICE:
+        return timedelta(hours=2, minutes=30)
+    return timedelta(hours=4)
 
 
 def parse_enum_set(values: str | None, enum_type):

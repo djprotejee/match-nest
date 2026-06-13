@@ -5,7 +5,7 @@ export type FeedMode = "main" | "starred" | "custom";
 export type ImportanceMode = "all" | "main" | "significant";
 export type WatchStatus = "none" | "will_watch" | "watching_live" | "watched" | "skip";
 export type NotifyPreset = "start" | "15m" | "1h" | "morning";
-export type SpoilerMode = "all" | "past" | "past_live" | "custom" | "off";
+export type SpoilerMode = "all" | "past" | "live" | "past_live" | "custom" | "off";
 
 export interface FollowCategory {
   id: FollowLevel;

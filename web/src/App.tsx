@@ -1808,6 +1808,7 @@ function SpoilerPolicyControls({
       >
         <option value="all">Hide all scores</option>
         <option value="past">Hide past only</option>
+        <option value="live">Hide live only</option>
         <option value="past_live">Hide past and live</option>
         <option value="custom">Custom sports, categories, teams</option>
         <option value="off">Show scores</option>
@@ -1955,7 +1956,7 @@ function EventCard(props: {
       return;
     }
     setDetailsOpen(true);
-    if (details || (event.sport !== "formula" && event.sport !== "cs2")) {
+    if (details || (event.sport !== "formula" && event.sport !== "cs2" && event.sport !== "football")) {
       return;
     }
     setDetailsLoading(true);
@@ -2000,7 +2001,7 @@ function EventCard(props: {
 
       <div className="event-actions">
         <WatchSelect value={props.watch} onChange={(value) => props.onWatch(event.id, value)} />
-        {event.sport === "formula" || event.sport === "cs2" ? (
+        {event.sport === "formula" || event.sport === "cs2" || event.sport === "football" ? (
           <button className="text-action" type="button" onClick={() => void toggleDetails()}>
             {detailsOpen ? "Hide details" : "Details"}
           </button>
