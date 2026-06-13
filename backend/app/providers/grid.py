@@ -227,19 +227,21 @@ def grid_search_params(match_item: dict) -> dict[str, str]:
     return params
 
 
-def grid_cs2_section(event_id: str, match_item: dict | None = None) -> dict | None:
+def grid_cs2_sections(event_id: str, match_item: dict | None = None) -> list[dict]:
     series_id = discover_grid_series_for_event(event_id, match_item) if match_item else grid_series_id_for_event(event_id)
     if not series_id:
         if os.getenv("GRID_API_TOKEN", "").strip():
-            return {
-                "title": "GRID discovery",
-                "columns": ["State", "Value"],
-                "rows": [
-                    ["Status", "Automatic search is configured, but no GRID series match has been linked yet."],
-                    ["Next step", "MatchNest will keep searching through configured GRID discovery endpoints."],
-                ],
-            }
-        return None
+            return [
+                {
+                    "title": "GRID discovery",
+                    "columns": ["State", "Value"],
+                    "rows": [
+                        ["Status", "Automatic search is configured, but no GRID series match has been linked yet."],
+                        ["Next step", "MatchNest will keep searching through configured GRID discovery endpoints."],
+                    ],
+                }
+            ]
+        return []
 
     payload, error, from_cache = GridClient().end_state(series_id)
     rows = [["Series ID", series_id], ["Raw cache", f"{GRID_PROVIDER}:{grid_end_state_cache_key(series_id)}"]]
@@ -248,10 +250,17 @@ def grid_cs2_section(event_id: str, match_item: dict | None = None) -> dict | No
     if error:
         rows.append(["Provider message", error])
     if payload is None:
-        return {"title": "GRID", "columns": ["Field", "Value"], "rows": rows}
+        return [{"title": "GRID", "columns": ["Field", "Value"], "rows": rows}]
 
     rows.extend(grid_payload_overview_rows(payload))
-    return {"title": "GRID end-state", "columns": ["Field", "Value"], "rows": rows}
+    sections = [{"title": "GRID end-state", "columns": ["Field", "Value"], "rows": rows}]
+    sections.extend(grid_payload_stat_sections(payload))
+    return sections
+
+
+def grid_cs2_section(event_id: str, match_item: dict | None = None) -> dict | None:
+    sections = grid_cs2_sections(event_id, match_item)
+    return sections[0] if sections else None
 
 
 def grid_payload_overview_rows(payload: Any) -> list[list[str]]:
@@ -275,9 +284,202 @@ def grid_payload_overview_rows(payload: Any) -> list[list[str]]:
     return rows
 
 
+def grid_payload_stat_sections(payload: Any) -> list[dict]:
+    """Build useful CS2 tables from GRID end-state data without assuming one schema.
+
+    GRID end-state payloads can vary by feed version. These extractors look for
+    common map, team, and player stat shapes and fall back to raw overview rows
+    when detailed fields are not present.
+    """
+    sections = []
+    map_section = grid_maps_section(payload)
+    if map_section:
+        sections.append(map_section)
+    team_section = grid_team_stats_section(payload)
+    if team_section:
+        sections.append(team_section)
+    player_section = grid_player_stats_section(payload)
+    if player_section:
+        sections.append(player_section)
+    return sections
+
+
+def grid_maps_section(payload: Any) -> dict | None:
+    rows = []
+    seen = set()
+    for item in walk_dicts(payload):
+        map_name = first_value(item, ["map", "mapName", "map_name", "name"])
+        map_number = first_value(item, ["mapNumber", "map_number", "gameNumber", "game_number", "position", "number"])
+        if map_name is None and not has_any_key(item, ["rounds", "duration", "winner", "scores", "score"]):
+            continue
+        if map_number is None and "map" not in " ".join(str(key).lower() for key in item.keys()):
+            continue
+        score = grid_score_text(item)
+        winner = grid_name_text(first_value(item, ["winner", "winningTeam", "winnerTeam"]))
+        duration = first_value(item, ["duration", "length", "gameDuration"])
+        key = (str(map_number), str(map_name), score, winner)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            [
+                value_text(map_number),
+                grid_name_text(map_name),
+                score or "-",
+                winner or "-",
+                format_grid_duration(duration),
+            ]
+        )
+    if not rows:
+        return None
+    return {"title": "GRID maps", "columns": ["Map", "Name", "Score", "Winner", "Duration"], "rows": rows[:12]}
+
+
+def grid_team_stats_section(payload: Any) -> dict | None:
+    rows = []
+    seen = set()
+    for item in walk_dicts(payload):
+        team_name = grid_name_text(first_value(item, ["teamName", "team_name", "name", "displayName"]))
+        if not team_name or not looks_like_team_stats(item):
+            continue
+        stats = flattened_grid_stats(item)
+        score = first_value(item, ["score", "roundsWon", "rounds_won", "wins"])
+        row = [
+            team_name,
+            value_text(score),
+            value_text(first_stat(stats, ["kills", "killCount"])),
+            value_text(first_stat(stats, ["deaths", "deathCount"])),
+            value_text(first_stat(stats, ["assists", "assistCount"])),
+            value_text(first_stat(stats, ["damage", "damageDealt"])),
+        ]
+        key = tuple(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    if not rows:
+        return None
+    return {"title": "GRID team statistics", "columns": ["Team", "Score", "Kills", "Deaths", "Assists", "Damage"], "rows": rows[:16]}
+
+
+def grid_player_stats_section(payload: Any) -> dict | None:
+    rows = []
+    seen = set()
+    for item in walk_dicts(payload):
+        player_name = grid_name_text(first_value(item, ["nickname", "nickName", "playerName", "player_name", "name", "displayName"]))
+        if not player_name or not looks_like_player_stats(item):
+            continue
+        stats = flattened_grid_stats(item)
+        team = grid_name_text(first_value(item, ["teamName", "team_name", "team", "teamId"]))
+        row = [
+            player_name,
+            team or "-",
+            value_text(first_stat(stats, ["kills", "killCount", "totalKills"])),
+            value_text(first_stat(stats, ["deaths", "deathCount", "totalDeaths"])),
+            value_text(first_stat(stats, ["assists", "assistCount", "totalAssists"])),
+            value_text(first_stat(stats, ["adr", "averageDamagePerRound"])),
+            value_text(first_stat(stats, ["rating", "rating2", "rating2_0"])),
+            value_text(first_stat(stats, ["headshots", "headshotKills"])),
+        ]
+        key = tuple(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    if not rows:
+        return None
+    return {"title": "GRID player statistics", "columns": ["Player", "Team", "K", "D", "A", "ADR", "Rating", "HS"], "rows": rows[:40]}
+
+
 def trim_value(value: Any) -> str:
     text = str(value)
     return text if len(text) <= 120 else f"{text[:117]}..."
+
+
+def value_text(value: Any) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def has_any_key(item: dict, keys: list[str]) -> bool:
+    normalized = {str(key).lower() for key in item.keys()}
+    return any(key.lower() in normalized for key in keys)
+
+
+def grid_name_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(first_value(value, ["name", "displayName", "nickname", "teamName", "playerName"]) or "")
+    if value is None:
+        return ""
+    return str(value)
+
+
+def grid_score_text(item: dict) -> str | None:
+    score = first_value(item, ["score", "scores", "result"])
+    if isinstance(score, dict):
+        left = first_value(score, ["home", "team1", "teamOne", "a", "first"])
+        right = first_value(score, ["away", "team2", "teamTwo", "b", "second"])
+        if left is not None and right is not None:
+            return f"{left}-{right}"
+    if isinstance(score, list):
+        values = [value_text(entry.get("score") if isinstance(entry, dict) else entry) for entry in score[:2]]
+        if len(values) == 2:
+            return f"{values[0]}-{values[1]}"
+    if score is not None and not isinstance(score, (dict, list)):
+        return str(score)
+    left = first_value(item, ["team1Score", "teamOneScore", "homeScore"])
+    right = first_value(item, ["team2Score", "teamTwoScore", "awayScore"])
+    if left is not None and right is not None:
+        return f"{left}-{right}"
+    return None
+
+
+def format_grid_duration(value: Any) -> str:
+    if value is None:
+        return "-"
+    try:
+        seconds = int(float(value) / 1000) if float(value) > 10_000 else int(float(value))
+    except (TypeError, ValueError):
+        return str(value)
+    minutes, rest = divmod(seconds, 60)
+    return f"{minutes}:{rest:02d}"
+
+
+def flattened_grid_stats(item: dict) -> dict[str, Any]:
+    stats: dict[str, Any] = {}
+    for key, value in item.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            stats[str(key)] = value
+        elif isinstance(value, dict) and str(key).lower() in {"stats", "statistics", "totals", "performance"}:
+            for nested_key, nested_value in value.items():
+                if isinstance(nested_value, (str, int, float, bool)) or nested_value is None:
+                    stats[str(nested_key)] = nested_value
+    return stats
+
+
+def first_stat(stats: dict[str, Any], keys: list[str]) -> Any:
+    normalized = {key.lower(): value for key, value in stats.items()}
+    for key in keys:
+        if key.lower() in normalized:
+            return normalized[key.lower()]
+    return None
+
+
+def looks_like_team_stats(item: dict) -> bool:
+    text = " ".join(str(key).lower() for key in item.keys())
+    if "player" in text:
+        return False
+    return "team" in text and bool({"score", "roundswon", "kills", "deaths", "assists", "statistics", "stats"} & set(re.findall(r"[a-z]+", text)))
+
+
+def looks_like_player_stats(item: dict) -> bool:
+    text = " ".join(str(key).lower() for key in item.keys())
+    has_player_identity = any(key in text for key in ["player", "nickname", "steam", "participant"])
+    has_stats = any(key in text for key in ["kill", "death", "assist", "adr", "rating", "headshot", "damage", "stats", "statistics"])
+    return has_player_identity and has_stats
 
 
 def extract_grid_series_candidates(payload: Any) -> list[GridSeriesCandidate]:

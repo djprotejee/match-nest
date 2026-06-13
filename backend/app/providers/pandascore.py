@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .base import EventProvider
-from .grid import GRID_PROVIDER, grid_cs2_section, grid_end_state_cache_key, grid_series_id_for_event
+from .grid import GRID_PROVIDER, grid_cs2_sections, grid_end_state_cache_key, grid_series_id_for_event
 from .hltv import find_hltv_team_rank, hltv_rankings
 from ..models import Event, EventStatus, Sport
 from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
@@ -172,7 +172,7 @@ def cs2_match_details(event_id: str, item: dict) -> dict:
         cs2_score_section(item),
         cs2_hltv_section(item),
         cs2_games_section(item),
-        grid_cs2_section(event_id, item),
+        *grid_cs2_sections(event_id, item),
         cs2_stats_availability_section(item),
     ]
     return {
