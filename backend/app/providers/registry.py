@@ -47,7 +47,7 @@ class ProviderResult:
 
 
 _CACHE_TTL = timedelta(minutes=1)
-PROVIDER_CACHE_SCHEMA_VERSION = "v2"
+PROVIDER_CACHE_SCHEMA_VERSION = "v3"
 _CACHE: dict[str, tuple[datetime, list[ProviderResult], list[Event]]] = {}
 _PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=6)
 _IN_FLIGHT_LOCK = threading.Lock()
