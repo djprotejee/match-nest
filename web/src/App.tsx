@@ -1982,32 +1982,69 @@ function EventDetailsPanel({
         </div>
       ) : null}
       {details.sections.map((section) => (
-        <div className="details-table-wrap" key={section.title}>
-          <h4>{section.title}</h4>
-          <table className="details-table">
-            <thead>
-              <tr>
-                {section.columns.map((column) => (
-                  <th className={tableColumnClass(column)} key={column}>
-                    {column}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {section.rows.map((row, rowIndex) => (
-                <tr key={`${section.title}-${rowIndex}`}>
-                  {row.map((cell, cellIndex) => (
-                    <td className={tableColumnClass(section.columns[cellIndex])} key={`${section.title}-${rowIndex}-${cellIndex}`}>
-                      {cell}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SortableDetailsTable section={section} key={section.title} />
       ))}
+    </div>
+  );
+}
+
+function SortableDetailsTable({ section }: { section: EventDetails["sections"][number] }) {
+  const [sort, setSort] = useState<{ columnIndex: number; direction: "asc" | "desc" } | null>(null);
+  const sortedRows = useMemo(() => {
+    if (!sort) {
+      return section.rows;
+    }
+    return [...section.rows].sort((left, right) => {
+      const result = compareTableCells(left[sort.columnIndex], right[sort.columnIndex]);
+      return sort.direction === "asc" ? result : -result;
+    });
+  }, [section.rows, sort]);
+
+  function toggleSort(columnIndex: number) {
+    setSort((current) => {
+      if (!current || current.columnIndex !== columnIndex) {
+        return { columnIndex, direction: "asc" };
+      }
+      if (current.direction === "asc") {
+        return { columnIndex, direction: "desc" };
+      }
+      return null;
+    });
+  }
+
+  return (
+    <div className="details-table-wrap">
+      <h4>{section.title}</h4>
+      <table className="details-table">
+        <thead>
+          <tr>
+            {section.columns.map((column, columnIndex) => (
+              <th className={tableColumnClass(column)} key={column}>
+                <button
+                  className={`table-sort-button ${sort?.columnIndex === columnIndex ? "is-active" : ""}`}
+                  type="button"
+                  onClick={() => toggleSort(columnIndex)}
+                  title={`Sort by ${column}`}
+                >
+                  <span>{column}</span>
+                  {sort?.columnIndex === columnIndex ? <small>{sort.direction}</small> : null}
+                </button>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sortedRows.map((row, rowIndex) => (
+            <tr key={`${section.title}-${rowIndex}-${row.join("|")}`}>
+              {row.map((cell, cellIndex) => (
+                <td className={tableColumnClass(section.columns[cellIndex])} key={`${section.title}-${rowIndex}-${cellIndex}`}>
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -2023,6 +2060,38 @@ function tableColumnClass(column: string): string | undefined {
     return "tyre-strategy-cell";
   }
   return undefined;
+}
+
+function compareTableCells(left: string | undefined, right: string | undefined): number {
+  const leftValue = normalizedTableSortValue(left);
+  const rightValue = normalizedTableSortValue(right);
+  if (typeof leftValue === "number" && typeof rightValue === "number") {
+    return leftValue - rightValue;
+  }
+  return String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: "base" });
+}
+
+function normalizedTableSortValue(value: string | undefined): number | string {
+  const text = (value || "").trim();
+  if (!text || text === "-") {
+    return Number.POSITIVE_INFINITY;
+  }
+  const hltvRank = text.match(/^#(\d+)$/);
+  if (hltvRank) {
+    return Number(hltvRank[1]);
+  }
+  const signedNumber = text.match(/^([+-]?\d+(?:\.\d+)?)/);
+  if (signedNumber) {
+    return Number(signedNumber[1]);
+  }
+  const lapTime = text.match(/^(?:(\d+):)?(\d+):(\d{2}(?:\.\d+)?)$/);
+  if (lapTime) {
+    const hours = Number(lapTime[1] || 0);
+    const minutes = Number(lapTime[2] || 0);
+    const seconds = Number(lapTime[3] || 0);
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+  return text.toLowerCase();
 }
 
 function formatEventTimeForEvent(event: MatchEvent): string {

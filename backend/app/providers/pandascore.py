@@ -178,20 +178,13 @@ def cs2_match_summary(item: dict, title: str) -> str:
 
 
 def cs2_match_facts(item: dict) -> list[dict]:
-    facts = [
+    return [
         {"label": "Match ID", "value": str(item.get("id", "-"))},
-        {"label": "Status", "value": str(item.get("status", "-"))},
         {"label": "Format", "value": cs2_format(item)},
         {"label": "League", "value": str((item.get("league") or {}).get("name") or "-")},
         {"label": "Serie", "value": str((item.get("serie") or {}).get("full_name") or "-")},
         {"label": "Tournament", "value": str((item.get("tournament") or {}).get("name") or "-")},
-        {"label": "Begin", "value": str(item.get("begin_at") or "-")},
     ]
-    if item.get("end_at"):
-        facts.append({"label": "End", "value": str(item["end_at"])})
-    if item.get("winner"):
-        facts.append({"label": "Winner", "value": str(item.get("winner", {}).get("name") or "-")})
-    return facts
 
 
 def cs2_score_section(item: dict) -> dict | None:
@@ -233,25 +226,33 @@ def cs2_games_section(item: dict) -> dict | None:
                 str(game.get("position") or "-"),
                 " vs ".join([tag for tag in team_tags if tag]) or "-",
                 format_seconds(game.get("length")),
-                "locked" if game.get("detailed_stats") else "-",
             ]
         )
-    return {"title": "Maps", "columns": ["Map", "Teams", "Length", "Stats"], "rows": rows}
+    return {"title": "Maps", "columns": ["Map", "Teams", "Length"], "rows": rows}
 
 
 def cs2_stats_availability_section(item: dict) -> dict | None:
     if not item.get("detailed_stats"):
         return None
     return {
-        "title": "Player stats",
-        "columns": ["Status", "Note"],
+        "title": "Stats coverage",
+        "columns": ["Provider", "Note"],
         "rows": [
             [
-                "not available",
-                "PandaScore marks detailed_stats=true, but match/game stats endpoints return 403 on the configured token. Map score and player stats need GRID/Open Access or another stats provider.",
+                "GRID",
+                cs2_grid_stats_note(),
             ]
         ],
     }
+
+
+def cs2_grid_stats_note() -> str:
+    if os.getenv("GRID_API_TOKEN", "").strip():
+        return (
+            "GRID token is configured. Detailed map and player stats still need a GRID match binding "
+            "or a GRID endpoint that can resolve this PandaScore match."
+        )
+    return "GRID token is not configured. Add GRID_API_TOKEN to enable the future CS2 stats provider."
 
 
 def cs2_competition_name(item: dict) -> str:

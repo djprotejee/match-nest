@@ -578,6 +578,33 @@ h2 {
   text-transform: uppercase;
 }
 
+.table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.table-sort-button small {
+  color: #ff8a3d;
+  font-size: 0.58rem;
+  text-transform: lowercase;
+}
+
+.table-sort-button.is-active span {
+  color: #e8eaf0;
+}
+
 .details-table td {
   color: #e8eaf0;
   font-size: 0.76rem;
