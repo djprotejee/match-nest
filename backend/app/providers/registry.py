@@ -238,6 +238,8 @@ def fetch_event_details(event_id: str) -> dict | None:
             details = PandaScoreCS2Provider().details(event_id, get_event(event_id))
         elif event_id.startswith("football-espn-"):
             details = EspnFootballProvider().details(event_id, get_event(event_id))
+        elif event_id.startswith("football-apifootball-"):
+            details = ApiFootballProvider().details(event_id)
         if details and details.get("source") != "matchnest":
             upsert_event_details_cache(event_id, str(details.get("source") or "unknown"), details)
         return details or cached

@@ -20,6 +20,8 @@ from ..storage import get_cached_provider_payload, provider_payload_state, upser
 
 API_FOOTBALL_CACHE_TTL = timedelta(hours=12)
 API_FOOTBALL_TEAM_CACHE_TTL = timedelta(days=30)
+API_FOOTBALL_DETAILS_CACHE_TTL = timedelta(minutes=10)
+API_FOOTBALL_STABLE_DETAILS_CACHE_TTL = timedelta(days=30)
 
 
 class ApiFootballProvider(EventProvider):
@@ -147,6 +149,31 @@ class ApiFootballProvider(EventProvider):
             importance=football_importance(entity_ids),
         )
 
+    def details(self, event_id: str) -> dict | None:
+        fixture_id = parse_api_football_event_id(event_id)
+        if fixture_id is None or not self.token:
+            return None
+        fixture_payload = self._cached_request("fixtures", {"id": str(fixture_id)}, API_FOOTBALL_DETAILS_CACHE_TTL)
+        fixtures = fixture_payload.get("response") or []
+        if not fixtures:
+            return None
+        fixture = fixtures[0]
+        stable_ttl = API_FOOTBALL_STABLE_DETAILS_CACHE_TTL if api_football_status(fixture.get("fixture", {}).get("status", {}), datetime.now(timezone.utc)) == EventStatus.PAST else API_FOOTBALL_DETAILS_CACHE_TTL
+        detail_payloads = {
+            "events": self._cached_request("fixtures/events", {"fixture": str(fixture_id)}, stable_ttl),
+            "lineups": self._cached_request("fixtures/lineups", {"fixture": str(fixture_id)}, stable_ttl),
+            "statistics": self._cached_request("fixtures/statistics", {"fixture": str(fixture_id)}, stable_ttl),
+            "players": self._cached_request("fixtures/players", {"fixture": str(fixture_id)}, stable_ttl),
+        }
+        league = fixture.get("league") or {}
+        if league.get("id") and league.get("season"):
+            detail_payloads["standings"] = self._cached_request(
+                "standings",
+                {"league": str(league["id"]), "season": str(league["season"])},
+                API_FOOTBALL_STABLE_DETAILS_CACHE_TTL,
+            )
+        return api_football_details_payload(event_id, fixture, detail_payloads)
+
 
 def api_football_team_entities() -> dict[str, int]:
     return parse_entity_id_map(os.getenv("API_FOOTBALL_TEAM_IDS", ""))
@@ -251,6 +278,198 @@ def api_football_score_summary(item: dict, home: str, away: str) -> str | None:
     if home_score is None or away_score is None:
         return None
     return f"{home} {home_score}-{away_score} {away}"
+
+
+def parse_api_football_event_id(event_id: str) -> int | None:
+    prefix = "football-apifootball-"
+    if not event_id.startswith(prefix):
+        return None
+    try:
+        return int(event_id[len(prefix) :])
+    except ValueError:
+        return None
+
+
+def api_football_details_payload(event_id: str, fixture: dict, detail_payloads: dict[str, dict]) -> dict:
+    teams = fixture.get("teams") or {}
+    home = teams.get("home") or {}
+    away = teams.get("away") or {}
+    league = fixture.get("league") or {}
+    fixture_meta = fixture.get("fixture") or {}
+    status = fixture_meta.get("status") or {}
+    score = fixture.get("score") or {}
+    goals = fixture.get("goals") or {}
+    home_name = str(home.get("name") or "Home")
+    away_name = str(away.get("name") or "Away")
+    summary = api_football_score_summary(fixture, home_name, away_name) or f"{home_name} vs {away_name}"
+    facts = [
+        {"label": "Competition", "value": str(league.get("name") or "-")},
+        {"label": "Status", "value": str(status.get("long") or status.get("short") or "-")},
+        {"label": "Venue", "value": fixture_venue_text(fixture_meta.get("venue") or {})},
+        {"label": "Round", "value": str(league.get("round") or "-")},
+    ]
+    sections = [
+        football_score_section(home_name, away_name, goals, score),
+        football_events_section(detail_payloads.get("events", {})),
+        football_lineups_section(detail_payloads.get("lineups", {})),
+        football_team_stats_section(detail_payloads.get("statistics", {})),
+        football_player_stats_section(detail_payloads.get("players", {})),
+        football_standings_section(detail_payloads.get("standings", {}), [home.get("id"), away.get("id")]),
+    ]
+    return {
+        "event_id": event_id,
+        "sport": "football",
+        "source": "api-football",
+        "summary": summary,
+        "facts": facts,
+        "sections": [section for section in sections if section is not None],
+    }
+
+
+def fixture_venue_text(venue: dict) -> str:
+    parts = [venue.get("name"), venue.get("city")]
+    return ", ".join(str(part) for part in parts if part) or "-"
+
+
+def football_score_section(home: str, away: str, goals: dict, score: dict) -> dict:
+    return {
+        "title": "Score",
+        "columns": ["Team", "Goals", "Half time", "Full time", "Extra time", "Penalty"],
+        "rows": [
+            [
+                home,
+                value_text(goals.get("home")),
+                value_text((score.get("halftime") or {}).get("home")),
+                value_text((score.get("fulltime") or {}).get("home")),
+                value_text((score.get("extratime") or {}).get("home")),
+                value_text((score.get("penalty") or {}).get("home")),
+            ],
+            [
+                away,
+                value_text(goals.get("away")),
+                value_text((score.get("halftime") or {}).get("away")),
+                value_text((score.get("fulltime") or {}).get("away")),
+                value_text((score.get("extratime") or {}).get("away")),
+                value_text((score.get("penalty") or {}).get("away")),
+            ],
+        ],
+    }
+
+
+def football_events_section(payload: dict) -> dict | None:
+    rows = []
+    for item in payload.get("response") or []:
+        team = item.get("team") or {}
+        player = item.get("player") or {}
+        assist = item.get("assist") or {}
+        time = item.get("time") or {}
+        rows.append(
+            [
+                f"{value_text(time.get('elapsed'))}'",
+                str(team.get("name") or "-"),
+                str(item.get("type") or "-"),
+                str(item.get("detail") or "-"),
+                str(player.get("name") or "-"),
+                str(assist.get("name") or "-"),
+                str(item.get("comments") or "-"),
+            ]
+        )
+    if not rows:
+        return {"title": "Match events", "columns": ["Info"], "rows": [["No match events are available from API-Football yet."]]}
+    return {"title": "Match events", "columns": ["Time", "Team", "Type", "Detail", "Player", "Assist", "Comment"], "rows": rows}
+
+
+def football_lineups_section(payload: dict) -> dict | None:
+    rows = []
+    for team_lineup in payload.get("response") or []:
+        team = (team_lineup.get("team") or {}).get("name") or "-"
+        formation = team_lineup.get("formation") or "-"
+        for player_item in team_lineup.get("startXI") or []:
+            player = player_item.get("player") or {}
+            rows.append([str(team), "XI", str(formation), value_text(player.get("number")), str(player.get("name") or "-"), str(player.get("pos") or "-")])
+        for player_item in team_lineup.get("substitutes") or []:
+            player = player_item.get("player") or {}
+            rows.append([str(team), "Bench", str(formation), value_text(player.get("number")), str(player.get("name") or "-"), str(player.get("pos") or "-")])
+    if not rows:
+        return {"title": "Lineups", "columns": ["Info"], "rows": [["Lineups are not available from API-Football yet."]]}
+    return {"title": "Lineups", "columns": ["Team", "Role", "Formation", "No", "Player", "Pos"], "rows": rows}
+
+
+def football_team_stats_section(payload: dict) -> dict | None:
+    response = payload.get("response") or []
+    if len(response) < 2:
+        return {"title": "Team statistics", "columns": ["Info"], "rows": [["Team statistics are not available from API-Football yet."]]}
+    teams = []
+    for item in response[:2]:
+        team = item.get("team") or {}
+        stats = {stat.get("type"): stat.get("value") for stat in item.get("statistics") or []}
+        teams.append((str(team.get("name") or "-"), stats))
+    stat_names = sorted(set(teams[0][1]) | set(teams[1][1]))
+    rows = [[name, value_text(teams[0][1].get(name)), value_text(teams[1][1].get(name))] for name in stat_names]
+    return {"title": "Team statistics", "columns": ["Metric", teams[0][0], teams[1][0]], "rows": rows}
+
+
+def football_player_stats_section(payload: dict) -> dict | None:
+    rows = []
+    for team_item in payload.get("response") or []:
+        team = (team_item.get("team") or {}).get("name") or "-"
+        for player_item in team_item.get("players") or []:
+            player = player_item.get("player") or {}
+            stats = (player_item.get("statistics") or [{}])[0]
+            games = stats.get("games") or {}
+            goals = stats.get("goals") or {}
+            passes = stats.get("passes") or {}
+            duels = stats.get("duels") or {}
+            rows.append(
+                [
+                    str(team),
+                    value_text(player.get("number")),
+                    str(player.get("name") or "-"),
+                    str(games.get("position") or "-"),
+                    value_text(games.get("minutes")),
+                    value_text(games.get("rating")),
+                    value_text(goals.get("total")),
+                    value_text(goals.get("assists")),
+                    value_text(passes.get("key")),
+                    value_text(duels.get("won")),
+                ]
+            )
+    if not rows:
+        return {"title": "Player statistics", "columns": ["Info"], "rows": [["Player ratings and statistics are not available from API-Football yet."]]}
+    return {"title": "Player statistics", "columns": ["Team", "No", "Player", "Pos", "Min", "Rating", "G", "A", "Key passes", "Duels won"], "rows": rows}
+
+
+def football_standings_section(payload: dict, team_ids: list[object]) -> dict | None:
+    leagues = payload.get("response") or []
+    standings = (((leagues[0] if leagues else {}).get("league") or {}).get("standings") or [[]])[0]
+    selected_ids = {str(team_id) for team_id in team_ids if team_id is not None}
+    rows = []
+    for item in standings:
+        team = item.get("team") or {}
+        if selected_ids and str(team.get("id")) not in selected_ids:
+            continue
+        all_stats = item.get("all") or {}
+        goals = all_stats.get("goals") or {}
+        rows.append(
+            [
+                value_text(item.get("rank")),
+                str(team.get("name") or "-"),
+                value_text(item.get("points")),
+                value_text(all_stats.get("played")),
+                value_text(all_stats.get("win")),
+                value_text(all_stats.get("draw")),
+                value_text(all_stats.get("lose")),
+                f"{value_text(goals.get('for'))}-{value_text(goals.get('against'))}",
+                value_text(item.get("description")),
+            ]
+        )
+    if not rows:
+        return {"title": "Standings snapshot", "columns": ["Info"], "rows": [["Standings are not available for this fixture from API-Football yet."]]}
+    return {"title": "Standings snapshot", "columns": ["Rank", "Team", "Pts", "P", "W", "D", "L", "Goals", "Note"], "rows": rows}
+
+
+def value_text(value: object) -> str:
+    return "-" if value is None else str(value)
 
 
 def dedupe_events(events: list[Event]) -> list[Event]:
