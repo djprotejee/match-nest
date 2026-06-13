@@ -261,6 +261,23 @@ h2 {
   gap: 12px;
 }
 
+.raw-cache-note {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #303545;
+  border-radius: 8px;
+  background: #15171d;
+  color: #9aa3b2;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.raw-cache-note strong {
+  color: #ff8a3d;
+  text-transform: uppercase;
+}
+
 .controls {
   display: grid;
   gap: 12px;

@@ -2213,6 +2213,8 @@ function EventDetailsPanel({
   if (!details) {
     return null;
   }
+  const sectionTitles = new Set(details.sections.map((section) => section.title.toLowerCase()));
+  const extraSections = eventDetailsV2Sections(details, sectionTitles);
 
   return (
     <div className="details-panel">
@@ -2230,8 +2232,53 @@ function EventDetailsPanel({
       {details.sections.map((section) => (
         <SortableDetailsTable section={section} key={section.title} />
       ))}
+      {extraSections.map((section) => (
+        <SortableDetailsTable section={section} key={section.title} />
+      ))}
+      {details.raw_payload_cache_keys?.length ? (
+        <div className="raw-cache-note">
+          <strong>Cached raw payloads</strong>
+          <span>{details.raw_payload_cache_keys.join(", ")}</span>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function eventDetailsV2Sections(details: EventDetails, existingTitles: Set<string>): EventDetails["sections"] {
+  const sections: EventDetails["sections"] = [];
+  if (details.score && !hasSectionTitle(existingTitles, "score")) {
+    sections.push(details.score);
+  }
+  appendRecordSection(sections, existingTitles, "Lineups", details.lineups);
+  appendRecordSection(sections, existingTitles, "Match events", details.timeline_events);
+  appendRecordSection(sections, existingTitles, "Team statistics", details.team_stats);
+  appendRecordSection(sections, existingTitles, "Player statistics", details.player_stats);
+  appendRecordSection(sections, existingTitles, "Standings snapshot", details.standings_snapshot);
+  appendRecordSection(sections, existingTitles, "Bracket snapshot", details.bracket_snapshot);
+  return sections;
+}
+
+function appendRecordSection(
+  sections: EventDetails["sections"],
+  existingTitles: Set<string>,
+  title: string,
+  records: Array<Record<string, string>> | undefined,
+) {
+  if (!records?.length || hasSectionTitle(existingTitles, title)) {
+    return;
+  }
+  const columns = [...new Set(records.flatMap((record) => Object.keys(record)))];
+  sections.push({
+    title,
+    columns,
+    rows: records.map((record) => columns.map((column) => String(record[column] ?? ""))),
+  });
+}
+
+function hasSectionTitle(existingTitles: Set<string>, title: string): boolean {
+  const normalized = title.toLowerCase();
+  return [...existingTitles].some((existing) => existing === normalized || existing.startsWith(normalized));
 }
 
 function SortableDetailsTable({ section }: { section: EventDetails["sections"][number] }) {
