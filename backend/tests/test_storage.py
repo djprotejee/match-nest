@@ -20,6 +20,7 @@ from app.storage import (
     list_events,
     mark_provider_fetch,
     preferences_for_user,
+    provider_payload_state,
     provider_fetch_state,
     provider_fetched_at,
     set_user_f1_sessions,
@@ -101,6 +102,7 @@ class StorageTests(unittest.TestCase):
                 upsert_provider_payload_cache("grid", "end-state:grid:series:2589176", payload)
 
                 self.assertEqual(get_cached_provider_payload("grid", "end-state:grid:series:2589176"), payload)
+                self.assertIsNotNone(provider_payload_state("grid", "end-state:grid:series:2589176").fetched_at)
 
     def test_delete_stale_events_for_source_keeps_current_provider_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

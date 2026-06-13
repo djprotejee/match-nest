@@ -10,6 +10,11 @@ from urllib.request import Request, urlopen
 
 from .base import EventProvider
 from ..models import Event, EventStatus, Sport
+from ..storage import (
+    get_cached_provider_payload,
+    provider_payload_state,
+    upsert_provider_payload_cache,
+)
 
 
 FOOTBALL_CACHE_TTL = timedelta(hours=6)
@@ -45,12 +50,18 @@ class FootballDataProvider(EventProvider):
         start_date = (start.astimezone(timezone.utc) if start else datetime.now(timezone.utc) - timedelta(days=9)).date()
         end_date = (end.astimezone(timezone.utc) if end else datetime.now(timezone.utc) + timedelta(days=30)).date()
         cache_path = football_cache_path(start_date.isoformat(), end_date.isoformat())
+        cache_key = football_matches_cache_key(start_date.isoformat(), end_date.isoformat())
+        db_cached = read_fresh_provider_matches(cache_key, FOOTBALL_CACHE_TTL)
+        if db_cached is not None:
+            return [self._match_to_event(item) for item in db_cached]
         cached = read_football_cache(cache_path, max_age=FOOTBALL_CACHE_TTL)
         if cached is not None:
             return [self._match_to_event(item) for item in cached]
 
         if _RATE_LIMIT_UNTIL is not None and datetime.now(timezone.utc) < _RATE_LIMIT_UNTIL:
             cached = read_football_cache(cache_path)
+            if cached is None:
+                cached = read_provider_matches(cache_key)
             if cached is not None:
                 return [self._match_to_event(item) for item in cached]
             raise RuntimeError(f"FootballDataProvider is rate-limited until {_RATE_LIMIT_UNTIL.isoformat()}")
@@ -64,11 +75,14 @@ class FootballDataProvider(EventProvider):
             if exc.code == 429:
                 _RATE_LIMIT_UNTIL = datetime.now(timezone.utc) + timedelta(seconds=90)
                 cached = read_football_cache(cache_path)
+                if cached is None:
+                    cached = read_provider_matches(cache_key)
                 if cached is not None:
                     return [self._match_to_event(item) for item in cached]
             raise
 
         write_football_cache(cache_path, matches)
+        upsert_provider_payload_cache("football-data", cache_key, matches)
 
         return [self._match_to_event(item) for item in matches]
 
@@ -112,6 +126,9 @@ class FootballDataProvider(EventProvider):
         return resolved
 
     def _fetch_all_teams(self) -> list[dict]:
+        cached = get_cached_provider_payload("football-data", "teams:all")
+        if isinstance(cached, list):
+            return cached
         teams: list[dict] = []
         offset = 0
         limit = 500
@@ -128,6 +145,7 @@ class FootballDataProvider(EventProvider):
             if len(chunk) < limit:
                 break
             offset += limit
+        upsert_provider_payload_cache("football-data", "teams:all", teams)
         return teams
 
     def _fetch_team_matches(self, team_id: int, start_date, end_date, entity_id: str) -> list[dict]:
@@ -353,6 +371,22 @@ def dedupe_matches(matches: list[dict]) -> list[dict]:
 
 def football_cache_path(start: str, end: str) -> Path:
     return Path(__file__).resolve().parents[2] / ".cache" / f"football-data-matches-{start}-{end}.json"
+
+
+def football_matches_cache_key(start: str, end: str) -> str:
+    return f"matches:{start}:{end}"
+
+
+def read_fresh_provider_matches(cache_key: str, max_age: timedelta) -> list[dict] | None:
+    state = provider_payload_state("football-data", cache_key)
+    if state is None or datetime.now(timezone.utc) - state.fetched_at > max_age:
+        return None
+    return state.payload if isinstance(state.payload, list) else None
+
+
+def read_provider_matches(cache_key: str) -> list[dict] | None:
+    payload = get_cached_provider_payload("football-data", cache_key)
+    return payload if isinstance(payload, list) else None
 
 
 def team_id_cache_path() -> Path:

@@ -44,6 +44,11 @@ class ProviderFetchState(NamedTuple):
     error: str | None
 
 
+class ProviderPayloadState(NamedTuple):
+    payload: dict | list
+    fetched_at: datetime
+
+
 class PostgresCursor:
     """Small cursor adapter that keeps the storage layer compatible with sqlite3."""
 
@@ -1226,10 +1231,15 @@ def upsert_event_details_cache(event_id: str, provider: str, details: dict) -> N
 
 
 def get_cached_provider_payload(provider: str, cache_key: str) -> dict | list | None:
+    state = provider_payload_state(provider, cache_key)
+    return state.payload if state else None
+
+
+def provider_payload_state(provider: str, cache_key: str) -> ProviderPayloadState | None:
     connection = connect()
     try:
         row = connection.execute(
-            "SELECT payload_json FROM provider_payload_cache WHERE provider = ? AND cache_key = ?",
+            "SELECT payload_json, fetched_at FROM provider_payload_cache WHERE provider = ? AND cache_key = ?",
             (provider, cache_key),
         ).fetchone()
     finally:
@@ -1237,9 +1247,11 @@ def get_cached_provider_payload(provider: str, cache_key: str) -> dict | list | 
     if not row:
         return None
     try:
-        return json.loads(row["payload_json"])
-    except json.JSONDecodeError:
+        payload = json.loads(row["payload_json"])
+        fetched_at = datetime.fromisoformat(row["fetched_at"]).astimezone(timezone.utc)
+    except (json.JSONDecodeError, ValueError):
         return None
+    return ProviderPayloadState(payload=payload, fetched_at=fetched_at)
 
 
 def upsert_provider_payload_cache(provider: str, cache_key: str, payload: dict | list) -> None:
