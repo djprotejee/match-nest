@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 from ..storage import (
     get_cached_provider_payload,
     get_event_provider_binding,
+    provider_payload_state,
     upsert_event_provider_binding,
     upsert_provider_payload_cache,
 )
@@ -21,6 +22,7 @@ GRID_PROVIDER = "grid"
 GRID_API_URL = "https://api.grid.gg/file-download/end-state/grid/series/{series_id}"
 GRID_DISCOVERY_TIMEOUT_SECONDS = 12
 GRID_DISCOVERY_MIN_SCORE = 78
+GRID_DISCOVERY_NEGATIVE_TTL = timedelta(hours=6)
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,8 @@ def discover_grid_series_for_event(event_id: str, match_item: dict) -> str | Non
     existing = grid_series_id_for_event(event_id)
     if existing:
         return existing
+    if grid_discovery_negative_cache_is_fresh(event_id):
+        return None
     client = GridClient()
     if not client.configured:
         return None
@@ -136,6 +140,7 @@ def discover_grid_series_for_event(event_id: str, match_item: dict) -> str | Non
                 best = (score, candidate)
 
     if best is None or best[0] < GRID_DISCOVERY_MIN_SCORE:
+        write_grid_discovery_negative_cache(event_id, best[0] if best else 0)
         return None
     candidate = best[1]
     upsert_event_provider_binding(
@@ -153,6 +158,29 @@ def discover_grid_series_for_event(event_id: str, match_item: dict) -> str | Non
         },
     )
     return candidate.series_id
+
+
+def grid_discovery_negative_cache_key(event_id: str) -> str:
+    return f"series-discovery:none:{event_id}"
+
+
+def grid_discovery_negative_cache_is_fresh(event_id: str) -> bool:
+    state = provider_payload_state(GRID_PROVIDER, grid_discovery_negative_cache_key(event_id))
+    if state is None:
+        return False
+    return datetime.now(timezone.utc) - state.fetched_at < GRID_DISCOVERY_NEGATIVE_TTL
+
+
+def write_grid_discovery_negative_cache(event_id: str, best_score: int) -> None:
+    upsert_provider_payload_cache(
+        GRID_PROVIDER,
+        grid_discovery_negative_cache_key(event_id),
+        {
+            "event_id": event_id,
+            "best_score": best_score,
+            "note": "No GRID series candidate matched the PandaScore event confidently enough.",
+        },
+    )
 
 
 def grid_discovery_urls(match_item: dict) -> list[str]:

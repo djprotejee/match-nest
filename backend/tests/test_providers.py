@@ -26,7 +26,13 @@ from app.providers.football_data import (
     parse_entity_id_map,
     parse_entity_query_map,
 )
-from app.providers.grid import extract_grid_series_candidates, score_grid_candidate
+from app.providers.grid import (
+    GRID_PROVIDER,
+    extract_grid_series_candidates,
+    grid_discovery_negative_cache_is_fresh,
+    grid_discovery_negative_cache_key,
+    score_grid_candidate,
+)
 from app.providers.hltv import find_hltv_team_rank, parse_hltv_rankings, rank_based_tier
 from app.providers.thesportsdb import TheSportsDBFootballProvider, parse_thesportsdb_datetime
 from app.providers.pandascore import (
@@ -40,6 +46,7 @@ from app.providers.pandascore import (
     pages_for_bucket,
     short_team_tag,
 )
+from app.storage import upsert_provider_payload_cache
 
 
 class ProviderMappingTests(unittest.TestCase):
@@ -260,6 +267,21 @@ class ProviderMappingTests(unittest.TestCase):
 
         self.assertEqual(candidates[0].series_id, "2589176")
         self.assertGreaterEqual(score_grid_candidate(match_item, candidates[0]), 78)
+
+    def test_grid_discovery_negative_cache_prevents_repeated_search(self) -> None:
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+
+        with TemporaryDirectory() as temp_dir:
+            with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
+                upsert_provider_payload_cache(
+                    GRID_PROVIDER,
+                    grid_discovery_negative_cache_key("cs2-1513136"),
+                    {"best_score": 0},
+                )
+
+                self.assertTrue(grid_discovery_negative_cache_is_fresh("cs2-1513136"))
 
     def test_thesportsdb_maps_ukraine_senior_fixture(self) -> None:
         item = {
