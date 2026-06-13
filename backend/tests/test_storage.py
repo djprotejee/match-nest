@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,6 +101,27 @@ class StorageTests(unittest.TestCase):
                 self.assertEqual(state.provider, "fastf1")
                 self.assertEqual(state.details, details)
 
+    def test_event_details_cache_refreshes_fetched_at(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
+                details = {
+                    "event_id": "cs2-1513136",
+                    "sport": "cs2",
+                    "source": "pandascore",
+                    "summary": "Initial",
+                    "facts": [],
+                    "sections": [],
+                }
+
+                upsert_event_details_cache("cs2-1513136", "pandascore", details)
+                first = event_details_cache_state("cs2-1513136")
+                time.sleep(0.01)
+                upsert_event_details_cache("cs2-1513136", "pandascore", {**details, "summary": "Updated"})
+                second = event_details_cache_state("cs2-1513136")
+
+                self.assertGreater(second.fetched_at, first.fetched_at)
+                self.assertEqual(second.details["summary"], "Updated")
+
     def test_provider_payload_cache_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
@@ -109,6 +131,18 @@ class StorageTests(unittest.TestCase):
 
                 self.assertEqual(get_cached_provider_payload("grid", "end-state:grid:series:2589176"), payload)
                 self.assertIsNotNone(provider_payload_state("grid", "end-state:grid:series:2589176").fetched_at)
+
+    def test_provider_payload_cache_refreshes_fetched_at(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
+                upsert_provider_payload_cache("api-football", "fixtures:id=42", {"version": 1})
+                first = provider_payload_state("api-football", "fixtures:id=42")
+                time.sleep(0.01)
+                upsert_provider_payload_cache("api-football", "fixtures:id=42", {"version": 2})
+                second = provider_payload_state("api-football", "fixtures:id=42")
+
+                self.assertGreater(second.fetched_at, first.fetched_at)
+                self.assertEqual(second.payload, {"version": 2})
 
     def test_event_provider_binding_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

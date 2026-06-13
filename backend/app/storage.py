@@ -1311,6 +1311,7 @@ def upsert_event_details_cache(event_id: str, provider: str, details: dict) -> N
             ON CONFLICT(event_id) DO UPDATE SET
                 provider = excluded.provider,
                 details_json = excluded.details_json,
+                fetched_at = excluded.fetched_at,
                 updated_at = excluded.updated_at
             """,
             (event_id, provider, json.dumps(details, ensure_ascii=False), now, now),
@@ -1354,6 +1355,7 @@ def upsert_provider_payload_cache(provider: str, cache_key: str, payload: dict |
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(provider, cache_key) DO UPDATE SET
                 payload_json = excluded.payload_json,
+                fetched_at = excluded.fetched_at,
                 updated_at = excluded.updated_at
             """,
             (provider, cache_key, json.dumps(payload, ensure_ascii=False), now, now),
