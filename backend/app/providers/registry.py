@@ -44,6 +44,7 @@ class ProviderResult:
 
 
 _CACHE_TTL = timedelta(minutes=1)
+PROVIDER_CACHE_SCHEMA_VERSION = "v2"
 _CACHE: dict[str, tuple[datetime, list[ProviderResult], list[Event]]] = {}
 _PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=6)
 _IN_FLIGHT_LOCK = threading.Lock()
@@ -121,6 +122,11 @@ def provider_results(
             continue
         if not provider_should_refresh(name, cache_key):
             results.append(ProviderResult(name=name, configured=True, count=cached_count))
+            continue
+
+        if name == "F4CalendarProvider":
+            provider_events = refresh_provider(provider, name, cache_key, start, end)
+            results.append(ProviderResult(name=name, configured=True, count=len(provider_events)))
             continue
 
         refresh_key = f"{name}:{cache_key}"
@@ -306,7 +312,7 @@ def range_cache_key(start: datetime | None, end: datetime | None, preferences: U
             if is_active_follow_level(follow.level)
         )
         follow_key = "|".join(followed) or "none"
-    return f"{start_key}:{end_key}:{follow_key}"
+    return f"{PROVIDER_CACHE_SCHEMA_VERSION}:{start_key}:{end_key}:{follow_key}"
 
 
 def followed_football_team_queries(preferences: UserPreferences) -> dict[str, list[str]]:
