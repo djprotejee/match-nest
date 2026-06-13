@@ -171,6 +171,18 @@ def init_db(connection: sqlite3.Connection | PostgresConnection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS provider_payload_cache (
+            provider TEXT NOT NULL,
+            cache_key TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (provider, cache_key)
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS provider_fetches (
             provider_name TEXT NOT NULL,
             cache_key TEXT NOT NULL,
@@ -1207,6 +1219,42 @@ def upsert_event_details_cache(event_id: str, provider: str, details: dict) -> N
                 updated_at = excluded.updated_at
             """,
             (event_id, provider, json.dumps(details, ensure_ascii=False), now, now),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def get_cached_provider_payload(provider: str, cache_key: str) -> dict | list | None:
+    connection = connect()
+    try:
+        row = connection.execute(
+            "SELECT payload_json FROM provider_payload_cache WHERE provider = ? AND cache_key = ?",
+            (provider, cache_key),
+        ).fetchone()
+    finally:
+        connection.close()
+    if not row:
+        return None
+    try:
+        return json.loads(row["payload_json"])
+    except json.JSONDecodeError:
+        return None
+
+
+def upsert_provider_payload_cache(provider: str, cache_key: str, payload: dict | list) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    connection = connect()
+    try:
+        connection.execute(
+            """
+            INSERT INTO provider_payload_cache (provider, cache_key, payload_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(provider, cache_key) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            """,
+            (provider, cache_key, json.dumps(payload, ensure_ascii=False), now, now),
         )
         connection.commit()
     finally:

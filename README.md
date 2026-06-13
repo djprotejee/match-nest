@@ -98,7 +98,8 @@ For Render, use `render.yaml` and set these environment variables in the Render 
 - `API_FOOTBALL_ENABLE=1` if your API-Football plan supports the seasons you need.
 - `THESPORTSDB_API_KEY` optional. MatchNest defaults to the public key `3` for the Ukraine NT fallback feed.
 - `PANDASCORE_TOKEN`
-- `GRID_API_TOKEN` optional future CS2 stats provider token.
+- `GRID_API_TOKEN` optional CS2 stats provider token.
+- `GRID_SERIES_IDS` optional manual CS2 event to GRID series map, for example `cs2-12345:2589176`.
 - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` for browser and iPhone push notifications.
 - `NOTIFICATION_DISPATCH_TOKEN`, a random shared secret for background refresh and notification cron calls.
 - `APP_PUBLIC_URL`, for example `https://your-service.onrender.com`.
@@ -226,7 +227,7 @@ The backend uses real provider adapters:
 - Formula 1 via Jolpica Ergast-compatible API.
 - Football via ESPN public soccer endpoints for tokenless future fixtures, including followed teams and followed tournaments. football-data.org remains available when `FOOTBALL_DATA_TOKEN` is set, but its free plan can restrict team-level national-team match endpoints. API-Football is optional and disabled by default because its free plan can reject modern/future seasons; set `API_FOOTBALL_ENABLE=1` only for a paid plan or explicit testing. TheSportsDB remains in code as a fallback adapter, but is not used in the normal provider cycle to avoid duplicate fixtures.
 - CS2 fixtures/results via PandaScore when `PANDASCORE_TOKEN` is set. CS upcoming, past, and running match endpoints are available to all plans.
-- Deep CS2 map/player/team statistics need a dedicated stats provider. `GRID_API_TOKEN` is reserved for GRID Open Access after access is approved.
+- Deep CS2 map/player/team statistics can use GRID Open Access when `GRID_API_TOKEN` is set and a match is mapped through `GRID_SERIES_IDS`. The GRID tutorial documents end-state downloads by `series_id`, so MatchNest keeps the PandaScore event to GRID series binding explicit until a reliable lookup endpoint is added.
 
 Demo fallback is disabled unless `MATCHNEST_ALLOW_DEMO_EVENTS=1`.
 

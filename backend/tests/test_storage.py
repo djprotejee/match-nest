@@ -15,6 +15,7 @@ from app.storage import (
     delete_stale_events_for_source,
     delete_or_hide_entity_for_user,
     get_cached_event_details,
+    get_cached_provider_payload,
     get_entity_record,
     list_events,
     mark_provider_fetch,
@@ -26,6 +27,7 @@ from app.storage import (
     translate_sql_for_postgres,
     update_custom_entity,
     upsert_event_details_cache,
+    upsert_provider_payload_cache,
     upsert_events,
     user_for_session,
     verify_email,
@@ -90,6 +92,15 @@ class StorageTests(unittest.TestCase):
                 upsert_event_details_cache("f1-2026-7-race", "fastf1", details)
 
                 self.assertEqual(get_cached_event_details("f1-2026-7-race"), details)
+
+    def test_provider_payload_cache_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
+                payload = {"series": {"id": 2589176}, "maps": [{"id": 1}]}
+
+                upsert_provider_payload_cache("grid", "end-state:grid:series:2589176", payload)
+
+                self.assertEqual(get_cached_provider_payload("grid", "end-state:grid:series:2589176"), payload)
 
     def test_delete_stale_events_for_source_keeps_current_provider_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

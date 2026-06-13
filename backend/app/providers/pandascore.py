@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .base import EventProvider
+from .grid import grid_cs2_section
 from .hltv import find_hltv_team_rank, hltv_rankings
 from ..models import Event, EventStatus, Sport
 
@@ -144,6 +145,7 @@ def cs2_match_details(event_id: str, item: dict) -> dict:
     sections = [
         cs2_score_section(item),
         cs2_games_section(item),
+        grid_cs2_section(event_id),
         cs2_stats_availability_section(item),
     ]
     return {
@@ -247,10 +249,12 @@ def cs2_stats_availability_section(item: dict) -> dict | None:
 
 
 def cs2_grid_stats_note() -> str:
+    if os.getenv("GRID_SERIES_IDS", "").strip():
+        return "GRID token and manual series bindings are configured. Open a mapped match to load cached GRID end-state stats."
     if os.getenv("GRID_API_TOKEN", "").strip():
         return (
             "GRID token is configured. Detailed map and player stats still need a GRID match binding "
-            "or a GRID endpoint that can resolve this PandaScore match."
+            "through GRID_SERIES_IDS."
         )
     return "GRID token is not configured. Add GRID_API_TOKEN to enable the future CS2 stats provider."
 
