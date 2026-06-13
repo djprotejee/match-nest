@@ -28,7 +28,7 @@ export interface AppState {
 
 export const STORAGE_KEY = "matchnest.state.v2";
 export const CACHE_PREFIX = "matchnest.timeline.cache.v2.";
-export const CALENDAR_CACHE_PREFIX = "matchnest.calendar.cache.v1.";
+export const CALENDAR_CACHE_PREFIX = "matchnest.calendar.cache.v2.";
 
 export const DEFAULT_CATEGORIES: FollowCategory[] = [
   { id: "main", name: "Main", color: "#ff8a3d", system: true },
