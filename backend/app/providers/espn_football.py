@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 from .base import EventProvider
 from .football_data import football_entity_ids, football_importance
 from ..models import Event, EventStatus, Sport
+from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
 
 
 ESPN_FOOTBALL_TEAMS = {
@@ -63,9 +64,16 @@ class EspnFootballProvider(EventProvider):
 
     def _scoreboard(self, league_slug: str, month_key: str) -> list[dict]:
         url = f"{self.base_url}/{league_slug}/scoreboard?{urlencode({'dates': month_key})}"
+        cache_key = f"scoreboard:{league_slug}:{month_key}"
         request = Request(url, headers={"User-Agent": "MatchNest personal schedule app", "Accept": "application/json"})
-        with urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        try:
+            with urlopen(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            cached = get_cached_provider_payload("espn-football", cache_key)
+            payload = cached if isinstance(cached, dict) else {}
+        else:
+            upsert_provider_payload_cache("espn-football", cache_key, payload)
         return payload.get("events") or []
 
     def _should_keep_event(self, item: dict, event: Event) -> bool:

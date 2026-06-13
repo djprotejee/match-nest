@@ -8,6 +8,7 @@ from urllib.request import urlopen
 
 from .base import EventProvider
 from ..models import Event, EventStatus, F1Session, Sport
+from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
 
 
 PRACTICE_SESSION_FILTERS = {
@@ -42,8 +43,7 @@ class JolpicaF1Provider(EventProvider):
         self.url = f"{self.base_url}/{self.season}.json"
 
     def fetch(self, start: datetime | None = None, end: datetime | None = None) -> list[Event]:
-        with urlopen(self.url, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = fetch_json(self.url)
 
         races = payload.get("MRData", {}).get("RaceTable", {}).get("Races", [])
         events: list[Event] = []
@@ -339,8 +339,15 @@ def status_for(starts_at: datetime) -> EventStatus:
 
 
 def fetch_json(url: str) -> dict:
-    with urlopen(url, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
+    cache_key = f"json:{url}"
+    try:
+        with urlopen(url, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        cached = get_cached_provider_payload("jolpica", cache_key)
+        return cached if isinstance(cached, dict) else {}
+    upsert_provider_payload_cache("jolpica", cache_key, payload)
+    return payload
 
 
 def first_race(payload: dict) -> dict | None:
