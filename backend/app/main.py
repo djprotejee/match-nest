@@ -22,6 +22,7 @@ from .models import EntityKind, EventStatus, F1Session, Follow, FollowLevel, KYI
 from .notifications import dispatch_due_notifications, notification_settings_payload, push_config, rule_payload
 from .providers.registry import fetch_event_details, fetch_events, provider_results
 from .service import (
+    effective_event_status,
     filter_events,
     group_by_day,
     month_range,
@@ -29,7 +30,9 @@ from .service import (
     parse_level_set,
     range_for_preset,
     serialize_event,
+    should_hide_result,
     update_f1_sessions,
+    visible_follow_level,
 )
 from .storage import (
     authenticate_user,
@@ -415,11 +418,66 @@ def events(
 
 
 @app.get("/events/{event_id}/details")
-def event_details(event_id: str) -> dict:
+def event_details(
+    event_id: str,
+    reveal_spoilers: bool = False,
+    current_user: UserAccount | None = Depends(optional_user),
+) -> dict:
     details = fetch_event_details(event_id)
     if details is None:
         raise HTTPException(status_code=404, detail="Event details are not available for this event.")
-    return details
+    event = get_event(event_id)
+    preferences = preferences_for_user(current_user.id if current_user else None)
+    return spoiler_safe_event_details(details, event, preferences, reveal_spoilers)
+
+
+SPOILER_SENSITIVE_SECTION_TOKENS = {
+    "score",
+    "classification",
+    "result",
+    "match events",
+    "team statistics",
+    "player statistics",
+    "standings",
+    "bracket",
+}
+
+
+def spoiler_safe_event_details(details: dict, event, preferences, reveal_spoilers: bool = False) -> dict:
+    if event is None or reveal_spoilers:
+        return details
+    event.status = effective_event_status(event)
+    level = visible_follow_level(event, preferences)
+    if not should_hide_result(event, preferences, level):
+        return details
+
+    safe_details = json.loads(json.dumps(details))
+    safe_details["summary"] = "Details are hidden by spoiler mode for this event."
+    safe_details["score"] = None
+    safe_details["timeline_events"] = []
+    safe_details["team_stats"] = []
+    safe_details["player_stats"] = []
+    safe_details["standings_snapshot"] = []
+    safe_details["bracket_snapshot"] = []
+    safe_details.pop("raw_provider_payload", None)
+    safe_details["sections"] = [
+        {
+            "title": "Spoiler hidden",
+            "columns": ["Info"],
+            "rows": [["Scores, classifications, match events, statistics, standings and brackets are hidden by your spoiler settings."]],
+        },
+        *[
+            section
+            for section in safe_details.get("sections", [])
+            if not is_spoiler_sensitive_section(section)
+        ],
+    ]
+    return safe_details
+
+
+def is_spoiler_sensitive_section(section: dict) -> bool:
+    title = str(section.get("title") or "").lower()
+    return any(token in title for token in SPOILER_SENSITIVE_SECTION_TOKENS)
 
 
 @app.get("/events/{event_id}")

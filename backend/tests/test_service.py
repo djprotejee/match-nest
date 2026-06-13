@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from app.models import Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserPreferences
 from app.seed import DEFAULT_PREFERENCES, demo_events
 from app.service import effective_event_status, filter_events, month_range, serialize_event, visible_follow_level
+from app.main import spoiler_safe_event_details
 
 
 class ServiceTests(unittest.TestCase):
@@ -97,6 +98,37 @@ class ServiceTests(unittest.TestCase):
 
         self.assertTrue(serialize_event(live_event, preferences)["result_hidden"])
         self.assertFalse(serialize_event(past_event, preferences)["result_hidden"])
+
+    def test_spoiler_safe_event_details_hide_sensitive_sections(self) -> None:
+        preferences = UserPreferences(default_hide_spoilers=True, ui_state={"spoilerMode": "all"})
+        event = Event(
+            id="cs2-score",
+            title="NAVI vs TheMongolz",
+            sport=Sport.CS2,
+            starts_at=datetime.now(KYIV_TZ),
+            status=EventStatus.LIVE,
+            entity_ids=["navi_cs2"],
+            source="pandascore",
+            result_summary="1-1",
+        )
+        details = {
+            "event_id": "cs2-score",
+            "summary": "NAVI vs TheMongolz | 1-1",
+            "sections": [
+                {"title": "Match score", "columns": ["Team", "Score"], "rows": [["NAVI", "1"]]},
+                {"title": "Lineups", "columns": ["Team", "Player"], "rows": [["NAVI", "b1t"]]},
+                {"title": "Player statistics", "columns": ["Player", "K"], "rows": [["b1t", "22"]]},
+            ],
+            "score": {"title": "Match score", "columns": ["Team", "Score"], "rows": [["NAVI", "1"]]},
+            "player_stats": [{"Player": "b1t", "K": "22"}],
+        }
+
+        safe_details = spoiler_safe_event_details(details, event, preferences)
+
+        self.assertEqual(safe_details["summary"], "Details are hidden by spoiler mode for this event.")
+        self.assertIsNone(safe_details["score"])
+        self.assertEqual(safe_details["player_stats"], [])
+        self.assertEqual([section["title"] for section in safe_details["sections"]], ["Spoiler hidden", "Lineups"])
 
     def test_elapsed_f1_qualifying_is_marked_past(self) -> None:
         event = Event(
