@@ -9,6 +9,7 @@ from app.providers.api_football import ApiFootballProvider, api_football_seasons
 from app.providers.espn_football import EspnFootballProvider, month_keys
 from app.providers.registry import (
     dedupe_cross_source_events,
+    detail_error_summary,
     followed_football_competitions,
     followed_football_team_queries,
     provider_should_refresh,
@@ -54,6 +55,13 @@ class ProviderMappingTests(unittest.TestCase):
         self.assertEqual([event.title for event in events], ["Italian F4 - Monza Day 1", "Italian F4 - Monza Day 2", "Italian F4 - Monza Day 3"])
         self.assertTrue(all(event.source == "f4-calendar" for event in events))
         self.assertEqual([event.starts_at.date().isoformat() for event in events], ["2026-06-19", "2026-06-20", "2026-06-21"])
+
+    def test_f1_detail_errors_use_product_copy(self) -> None:
+        summary = detail_error_summary("f1-2026-7-thirdpractice", Exception("HTTP Error 403: Forbidden"))
+
+        self.assertNotIn("403", summary)
+        self.assertNotIn("Forbidden", summary)
+        self.assertIn("not available yet", summary)
 
     def test_football_maps_main_team_and_starred_competition(self) -> None:
         ids = football_entity_ids("Ukraine", "France", "UEFA Euro")
