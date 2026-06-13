@@ -71,13 +71,16 @@ import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, 
 
 type Tab = "timeline" | "calendar" | "explore" | "settings";
 
+const STATUS_DEFAULTS_VERSION = 2;
+const DEFAULT_VISIBLE_STATUSES: EventStatus[] = ["live", "delayed", "upcoming"];
+
 export function App() {
   const [tab, setTab] = useState<Tab>("timeline");
   const [range, setRange] = useState<RangeFilter>("week");
   const [feedMode, setFeedMode] = useState<FeedMode>("main");
   const [importanceMode, setImportanceMode] = useState<ImportanceMode>("all");
-  const [timelineStatuses, setTimelineStatuses] = useState<Set<EventStatus>>(new Set(["live", "delayed", "upcoming"]));
-  const [calendarStatuses, setCalendarStatuses] = useState<Set<EventStatus>>(new Set(["live", "delayed", "upcoming"]));
+  const [timelineStatuses, setTimelineStatuses] = useState<Set<EventStatus>>(new Set(DEFAULT_VISIBLE_STATUSES));
+  const [calendarStatuses, setCalendarStatuses] = useState<Set<EventStatus>>(new Set(DEFAULT_VISIBLE_STATUSES));
   const [sports, setSports] = useState<Set<Sport>>(new Set(SPORTS));
   const [monthCursor, setMonthCursor] = useState(() => new Date());
   const [timeline, setTimeline] = useState<DayGroup[]>([]);
@@ -155,6 +158,7 @@ export function App() {
         sports: Array.from(sports),
         timelineStatuses: Array.from(timelineStatuses),
         calendarStatuses: Array.from(calendarStatuses),
+        statusDefaultsVersion: STATUS_DEFAULTS_VERSION,
       })).catch((error) => {
         setLastError(readErrorMessage(error));
       });
@@ -306,6 +310,7 @@ export function App() {
   }
 
   function syncViewSettings(uiState: Record<string, unknown>) {
+    const shouldMigrateStatusDefaults = uiState.statusDefaultsVersion !== STATUS_DEFAULTS_VERSION;
     if (isRangeFilter(uiState.range)) {
       setRange(uiState.range);
     }
@@ -320,10 +325,10 @@ export function App() {
       setSports(new Set(uiState.sports.filter(isSport)));
     }
     if (Array.isArray(uiState.timelineStatuses)) {
-      setTimelineStatuses(new Set(uiState.timelineStatuses.filter(isEventStatus)));
+      setTimelineStatuses(new Set(normalizeStoredStatuses(uiState.timelineStatuses, shouldMigrateStatusDefaults)));
     }
     if (Array.isArray(uiState.calendarStatuses)) {
-      setCalendarStatuses(new Set(uiState.calendarStatuses.filter(isEventStatus)));
+      setCalendarStatuses(new Set(normalizeStoredStatuses(uiState.calendarStatuses, shouldMigrateStatusDefaults)));
     }
     if (Array.isArray(uiState.customFeedLevels)) {
       updateState({ customFeedLevels: uiState.customFeedLevels.filter((value): value is FollowLevel => typeof value === "string") });
@@ -2281,6 +2286,7 @@ function accountSettingsPayload(state: AppState, viewState: {
   sports: Sport[];
   timelineStatuses: EventStatus[];
   calendarStatuses: EventStatus[];
+  statusDefaultsVersion: number;
 }): {
   f1_sessions: string[];
   hide_spoilers: boolean;
@@ -2341,6 +2347,12 @@ function isSport(value: unknown): value is Sport {
 
 function isEventStatus(value: unknown): value is EventStatus {
   return value === "past" || value === "live" || value === "delayed" || value === "upcoming" || value === "tbd";
+}
+
+function normalizeStoredStatuses(values: unknown[], shouldMigrateStatusDefaults: boolean): EventStatus[] {
+  const statuses = values.filter(isEventStatus);
+  const migrated = shouldMigrateStatusDefaults ? statuses.filter((status) => status !== "past") : statuses;
+  return migrated.length ? migrated : DEFAULT_VISIBLE_STATUSES;
 }
 
 function loadCachedCalendar(key: string): DayGroup[] | null {
