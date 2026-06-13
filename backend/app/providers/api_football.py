@@ -531,13 +531,12 @@ def football_standings_section(payload: dict, team_ids: list[object]) -> dict | 
     rows = []
     for item in standings:
         team = item.get("team") or {}
-        if selected_ids and str(team.get("id")) not in selected_ids:
-            continue
         all_stats = item.get("all") or {}
         goals = all_stats.get("goals") or {}
         rows.append(
             [
                 value_text(item.get("rank")),
+                "yes" if str(team.get("id")) in selected_ids else "",
                 str(team.get("name") or "-"),
                 value_text(item.get("points")),
                 value_text(all_stats.get("played")),
@@ -550,7 +549,7 @@ def football_standings_section(payload: dict, team_ids: list[object]) -> dict | 
         )
     if not rows:
         return {"title": "Standings snapshot", "columns": ["Info"], "rows": [["Standings are not available for this fixture from API-Football yet."]]}
-    return {"title": "Standings snapshot", "columns": ["Rank", "Team", "Pts", "P", "W", "D", "L", "Goals", "Note"], "rows": rows}
+    return {"title": "Standings snapshot", "columns": ["Rank", "Focus", "Team", "Pts", "P", "W", "D", "L", "Goals", "Note"], "rows": rows}
 
 
 def value_text(value: object) -> str:

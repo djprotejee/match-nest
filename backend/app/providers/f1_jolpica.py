@@ -157,6 +157,14 @@ class JolpicaF1Provider(EventProvider):
             "summary": race_summary(race),
             "facts": race_facts(race, fastest),
             "sections": sections,
+            "raw_payload_cache_keys": f1_raw_cache_keys(
+                self.base_url,
+                [
+                    f"{season}/{round_id}/results.json",
+                    f"{season}/{round_id}/driverStandings.json",
+                    f"{season}/{round_id}/constructorStandings.json",
+                ],
+            ),
         }
 
     def _qualifying_details(self, season: str, round_id: str) -> dict | None:
@@ -186,6 +194,14 @@ class JolpicaF1Provider(EventProvider):
             "summary": race_summary(race),
             "facts": race_facts(race, None),
             "sections": sections,
+            "raw_payload_cache_keys": f1_raw_cache_keys(
+                self.base_url,
+                [
+                    f"{season}/{round_id}/qualifying.json",
+                    f"{season}/{round_id}/driverStandings.json",
+                    f"{season}/{round_id}/constructorStandings.json",
+                ],
+            ),
         }
 
     def _sprint_details(self, season: str, round_id: str) -> dict | None:
@@ -224,6 +240,14 @@ class JolpicaF1Provider(EventProvider):
             "summary": race_summary(race),
             "facts": race_facts(race, fastest),
             "sections": sections,
+            "raw_payload_cache_keys": f1_raw_cache_keys(
+                self.base_url,
+                [
+                    f"{season}/{round_id}/sprint.json",
+                    f"{season}/{round_id}/driverStandings.json",
+                    f"{season}/{round_id}/constructorStandings.json",
+                ],
+            ),
         }
 
     def _alpha_session_details(
@@ -263,6 +287,10 @@ class JolpicaF1Provider(EventProvider):
             "summary": summary,
             "facts": alpha_session_facts(data),
             "sections": sections,
+            "raw_payload_cache_keys": [
+                f"jolpica:{json_cache_key(f'{self.alpha_base_url}/schedules/{season}/')}",
+                f"jolpica:{json_cache_key(f'{self.alpha_base_url}/results/{alpha_round_id}/{session_filter}/')}",
+            ],
         }
 
     def _session_facts_details(
@@ -289,6 +317,7 @@ class JolpicaF1Provider(EventProvider):
             "summary": f"{section_title.replace(' classification', '')} at {race_summary(race)}. Classification is not published by Jolpica for this session yet.",
             "facts": facts,
             "sections": [],
+            "raw_payload_cache_keys": f1_raw_cache_keys(self.base_url, [f"{season}/{round_id}.json"]),
         }
 
     def _scheduled_session_details(
@@ -314,6 +343,7 @@ class JolpicaF1Provider(EventProvider):
             "summary": f"{section_title.replace(' classification', '')} at {race_summary(race)}. Classification is not published by Jolpica for this session yet.",
             "facts": facts,
             "sections": [],
+            "raw_payload_cache_keys": f1_raw_cache_keys(self.base_url, [f"{season}/{round_id}.json"]),
         }
 
     def _alpha_round_id(self, season: str, round_id: str) -> str | None:
@@ -345,7 +375,7 @@ def status_for(starts_at: datetime) -> EventStatus:
 
 
 def fetch_json(url: str) -> dict:
-    cache_key = f"json:{url}"
+    cache_key = json_cache_key(url)
     try:
         with urlopen(url, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -354,6 +384,15 @@ def fetch_json(url: str) -> dict:
         return cached if isinstance(cached, dict) else {}
     upsert_provider_payload_cache("jolpica", cache_key, payload)
     return payload
+
+
+def json_cache_key(url: str) -> str:
+    return f"json:{url}"
+
+
+def f1_raw_cache_keys(base_url: str, paths: list[str]) -> list[str]:
+    root = base_url.rstrip("/")
+    return [f"jolpica:{json_cache_key(f'{root}/{path}')}" for path in paths]
 
 
 def first_race(payload: dict) -> dict | None:
