@@ -2066,8 +2066,7 @@ function SortableDetailsTable({ section }: { section: EventDetails["sections"][n
       return section.rows;
     }
     return [...section.rows].sort((left, right) => {
-      const result = compareTableCells(left[sort.columnIndex], right[sort.columnIndex]);
-      return sort.direction === "asc" ? result : -result;
+      return compareTableCells(left[sort.columnIndex], right[sort.columnIndex], sort.direction);
     });
   }, [section.rows, sort]);
 
@@ -2133,27 +2132,38 @@ function tableColumnClass(column: string): string | undefined {
   return undefined;
 }
 
-function compareTableCells(left: string | undefined, right: string | undefined): number {
+function compareTableCells(left: string | undefined, right: string | undefined, direction: "asc" | "desc"): number {
+  const leftMissing = isMissingTableValue(left);
+  const rightMissing = isMissingTableValue(right);
+  if (leftMissing || rightMissing) {
+    if (leftMissing && rightMissing) {
+      return 0;
+    }
+    return leftMissing ? 1 : -1;
+  }
+
   const leftValue = normalizedTableSortValue(left);
   const rightValue = normalizedTableSortValue(right);
+  const directionMultiplier = direction === "asc" ? 1 : -1;
   if (typeof leftValue === "number" && typeof rightValue === "number") {
-    return leftValue - rightValue;
+    return (leftValue - rightValue) * directionMultiplier;
   }
-  return String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: "base" });
+  return (
+    String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: "base" }) *
+    directionMultiplier
+  );
+}
+
+function isMissingTableValue(value: string | undefined): boolean {
+  const text = (value || "").trim();
+  return !text || text === "-";
 }
 
 function normalizedTableSortValue(value: string | undefined): number | string {
   const text = (value || "").trim();
-  if (!text || text === "-") {
-    return Number.POSITIVE_INFINITY;
-  }
   const hltvRank = text.match(/^#(\d+)$/);
   if (hltvRank) {
     return Number(hltvRank[1]);
-  }
-  const signedNumber = text.match(/^([+-]?\d+(?:\.\d+)?)/);
-  if (signedNumber) {
-    return Number(signedNumber[1]);
   }
   const lapTime = text.match(/^(?:(\d+):)?(\d+):(\d{2}(?:\.\d+)?)$/);
   if (lapTime) {
@@ -2161,6 +2171,10 @@ function normalizedTableSortValue(value: string | undefined): number | string {
     const minutes = Number(lapTime[2] || 0);
     const seconds = Number(lapTime[3] || 0);
     return hours * 3600 + minutes * 60 + seconds;
+  }
+  const signedNumber = text.match(/^([+-]?\d+(?:\.\d+)?)/);
+  if (signedNumber) {
+    return Number(signedNumber[1]);
   }
   return text.toLowerCase();
 }
