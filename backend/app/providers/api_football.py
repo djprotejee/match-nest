@@ -16,6 +16,7 @@ from .football_data import (
     parse_entity_id_map,
 )
 from ..models import Event, EventStatus, Sport
+from ..storage import get_cached_provider_payload, provider_payload_state, upsert_provider_payload_cache
 
 API_FOOTBALL_CACHE_TTL = timedelta(hours=12)
 API_FOOTBALL_TEAM_CACHE_TTL = timedelta(days=30)
@@ -85,6 +86,10 @@ class ApiFootballProvider(EventProvider):
 
     def _cached_request(self, endpoint: str, params: dict[str, str], max_age: timedelta) -> dict:
         path = api_football_cache_path(endpoint, params)
+        cache_key = api_football_cache_key(endpoint, params)
+        db_cached = read_fresh_api_football_payload(cache_key, max_age)
+        if db_cached is not None:
+            return db_cached
         cached = read_api_football_cache(path, max_age)
         if cached is not None:
             return cached
@@ -92,10 +97,13 @@ class ApiFootballProvider(EventProvider):
             payload = self._request(endpoint, params)
         except Exception:
             stale = read_api_football_cache(path, None)
+            if stale is None:
+                stale = read_api_football_payload(cache_key)
             if stale is not None:
                 return stale
             raise
         write_api_football_cache(path, payload)
+        upsert_provider_payload_cache("api-football", cache_key, payload)
         return payload
 
     def _request(self, endpoint: str, params: dict[str, str]) -> dict:
@@ -148,6 +156,23 @@ def api_football_cache_path(endpoint: str, params: dict[str, str]) -> Path:
     safe = "_".join(f"{key}-{value}" for key, value in sorted(params.items()))
     safe = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in safe)
     return Path(__file__).resolve().parents[2] / ".cache" / f"api-football-{endpoint}-{safe}.json"
+
+
+def api_football_cache_key(endpoint: str, params: dict[str, str]) -> str:
+    safe = urlencode(sorted(params.items()))
+    return f"{endpoint}:{safe}"
+
+
+def read_fresh_api_football_payload(cache_key: str, max_age: timedelta) -> dict | None:
+    state = provider_payload_state("api-football", cache_key)
+    if state is None or datetime.now(timezone.utc) - state.fetched_at > max_age:
+        return None
+    return state.payload if isinstance(state.payload, dict) else None
+
+
+def read_api_football_payload(cache_key: str) -> dict | None:
+    payload = get_cached_provider_payload("api-football", cache_key)
+    return payload if isinstance(payload, dict) else None
 
 
 def read_api_football_cache(path: Path, max_age: timedelta | None) -> dict | None:

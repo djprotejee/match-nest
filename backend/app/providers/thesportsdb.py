@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 from .base import EventProvider
 from .football_data import football_entity_ids, football_importance
 from ..models import Event, EventStatus, Sport
+from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
 
 
 THESPORTSDB_DEFAULT_KEY = "3"
@@ -62,10 +63,17 @@ class TheSportsDBFootballProvider(EventProvider):
 
     def _request(self, endpoint: str, params: dict[str, str]) -> dict:
         query = urlencode(params)
+        cache_key = f"{endpoint}:{query}"
         url = f"{self.base_url}/{self.api_key}/{endpoint}?{query}"
         request = Request(url, headers={"User-Agent": "MatchNest personal schedule app"})
-        with urlopen(request, timeout=20) as response:
-            return json.loads(response.read().decode("utf-8"))
+        try:
+            with urlopen(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            cached = get_cached_provider_payload("thesportsdb", cache_key)
+            return cached if isinstance(cached, dict) else {}
+        upsert_provider_payload_cache("thesportsdb", cache_key, payload)
+        return payload
 
     def _event_from_payload(self, item: dict, entity_id: str) -> Event | None:
         event_id = item.get("idEvent")
