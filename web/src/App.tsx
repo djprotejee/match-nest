@@ -82,11 +82,11 @@ export function App() {
   const [timelineStatuses, setTimelineStatuses] = useState<Set<EventStatus>>(new Set(DEFAULT_VISIBLE_STATUSES));
   const [calendarStatuses, setCalendarStatuses] = useState<Set<EventStatus>>(new Set(DEFAULT_VISIBLE_STATUSES));
   const [sports, setSports] = useState<Set<Sport>>(new Set(SPORTS));
-  const [monthCursor, setMonthCursor] = useState(() => new Date());
-  const [timeline, setTimeline] = useState<DayGroup[]>([]);
-  const [calendarGroups, setCalendarGroups] = useState<DayGroup[]>([]);
-  const [entities, setEntities] = useState<EntityItem[]>([]);
   const [state, setState] = useState<AppState>(loadAppState);
+  const [monthCursor, setMonthCursor] = useState(() => new Date());
+  const [timeline, setTimeline] = useState<DayGroup[]>(() => loadInitialTimelineCache(state)?.timeline || []);
+  const [calendarGroups, setCalendarGroups] = useState<DayGroup[]>(() => loadInitialCalendarCache(state) || []);
+  const [entities, setEntities] = useState<EntityItem[]>(() => loadInitialTimelineCache(state)?.entities || []);
   const [loading, setLoading] = useState(false);
   const [offline, setOffline] = useState(false);
   const [cacheNote, setCacheNote] = useState<string | null>(null);
@@ -2239,6 +2239,16 @@ function NavButton(props: { icon: React.ReactNode; label: string; active: boolea
       <span>{props.label}</span>
     </button>
   );
+}
+
+function loadInitialTimelineCache(state: AppState): { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null {
+  return loadCachedData(timelineCacheKey("week", state.hideSpoilers, "main", state.customFeedLevels));
+}
+
+function loadInitialCalendarCache(state: AppState): DayGroup[] | null {
+  const now = new Date();
+  const levels = followLevelsForFeedMode("main", state.customFeedLevels);
+  return loadCachedCalendar(calendarCacheKey(now.getFullYear(), now.getMonth() + 1, levels));
 }
 
 function loadCachedData(cacheKey: string): { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null {
