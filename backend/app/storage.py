@@ -160,6 +160,17 @@ def init_db(connection: sqlite3.Connection | PostgresConnection) -> None:
     connection.execute("CREATE INDEX IF NOT EXISTS idx_events_sport ON events(sport)")
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS event_details_cache (
+            event_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            details_json TEXT NOT NULL,
+            fetched_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS provider_fetches (
             provider_name TEXT NOT NULL,
             cache_key TEXT NOT NULL,
@@ -1166,6 +1177,40 @@ def get_event(event_id: str) -> Event | None:
     if not row:
         return None
     return event_from_payload(json.loads(row["raw_json"]))
+
+
+def get_cached_event_details(event_id: str) -> dict | None:
+    connection = connect()
+    try:
+        row = connection.execute("SELECT details_json FROM event_details_cache WHERE event_id = ?", (event_id,)).fetchone()
+    finally:
+        connection.close()
+    if not row:
+        return None
+    try:
+        return json.loads(row["details_json"])
+    except json.JSONDecodeError:
+        return None
+
+
+def upsert_event_details_cache(event_id: str, provider: str, details: dict) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    connection = connect()
+    try:
+        connection.execute(
+            """
+            INSERT INTO event_details_cache (event_id, provider, details_json, fetched_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(event_id) DO UPDATE SET
+                provider = excluded.provider,
+                details_json = excluded.details_json,
+                updated_at = excluded.updated_at
+            """,
+            (event_id, provider, json.dumps(details, ensure_ascii=False), now, now),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def mark_provider_fetch(provider_name: str, cache_key: str, status: str, error: str | None = None) -> None:

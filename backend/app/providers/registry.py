@@ -23,12 +23,14 @@ from ..models import EntityKind, Event, EventStatus, F1Session, FollowLevel, Spo
 from ..seed import DEFAULT_PREFERENCES, demo_events
 from ..storage import (
     delete_stale_events_for_source,
+    get_cached_event_details,
     get_event,
     list_entity_records,
     list_events,
     mark_provider_fetch,
     provider_bindings_for,
     provider_fetch_state,
+    upsert_event_details_cache,
     upsert_events,
 )
 
@@ -225,15 +227,24 @@ def fetch_events(
 
 def fetch_event_details(event_id: str) -> dict | None:
     load_environment()
+    cached = get_cached_event_details(event_id)
     try:
+        details = None
         if event_id.startswith("f1-"):
-            return JolpicaF1Provider().details(event_id)
-        if event_id.startswith("f4-"):
-            return F4CalendarProvider().details(event_id)
-        if event_id.startswith("cs2-"):
-            return PandaScoreCS2Provider().details(event_id, get_event(event_id))
-        return None
+            details = JolpicaF1Provider().details(event_id)
+        elif event_id.startswith("f4-"):
+            details = F4CalendarProvider().details(event_id)
+        elif event_id.startswith("cs2-"):
+            details = PandaScoreCS2Provider().details(event_id, get_event(event_id))
+        if details and details.get("source") != "matchnest":
+            upsert_event_details_cache(event_id, str(details.get("source") or "unknown"), details)
+        return details or cached
     except Exception as exc:
+        if cached:
+            cached_copy = json.loads(json.dumps(cached))
+            cached_copy["summary"] = f"{cached_copy.get('summary', 'Cached details')} Cached because the upstream provider is temporarily unavailable."
+            cached_copy.setdefault("facts", []).append({"label": "Cache", "value": f"Provider refresh failed: {detail_error_message(exc)}"})
+            return cached_copy
         return {
             "event_id": event_id,
             "sport": "formula" if event_id.startswith("f1-") else "unknown",
