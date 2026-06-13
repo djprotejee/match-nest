@@ -431,6 +431,18 @@ class ProviderMappingTests(unittest.TestCase):
                                 "standings": [
                                     [
                                         {
+                                            "rank": 1,
+                                            "team": {"id": 1, "name": "Hungary"},
+                                            "points": 7,
+                                            "all": {
+                                                "played": 3,
+                                                "win": 2,
+                                                "draw": 1,
+                                                "lose": 0,
+                                                "goals": {"for": 6, "against": 2},
+                                            },
+                                        },
+                                        {
                                             "rank": 2,
                                             "team": {"id": 2, "name": "Ukraine"},
                                             "points": 6,
@@ -456,6 +468,9 @@ class ProviderMappingTests(unittest.TestCase):
         self.assertIn("Team statistics", titles)
         self.assertIn("Player statistics", titles)
         self.assertIn("Standings snapshot", titles)
+        standings = next(section for section in details["sections"] if section["title"] == "Standings snapshot")
+        self.assertEqual([row[2] for row in standings["rows"]], ["Hungary", "Ukraine"])
+        self.assertEqual([row[1] for row in standings["rows"]], ["yes", "yes"])
 
     def test_api_football_details_resolve_for_espn_event_without_manual_fixture_id(self) -> None:
         provider = ApiFootballProvider(token="test", team_entities={"ukraine_nt": 772})
