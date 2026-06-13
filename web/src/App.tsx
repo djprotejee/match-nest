@@ -73,7 +73,7 @@ import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, 
 
 type Tab = "timeline" | "calendar" | "explore" | "settings";
 
-const STATUS_DEFAULTS_VERSION = 3;
+const STATUS_DEFAULTS_VERSION = 4;
 const DEFAULT_VISIBLE_STATUSES: EventStatus[] = ["live", "delayed", "upcoming"];
 
 export function App() {
