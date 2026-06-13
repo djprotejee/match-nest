@@ -11,6 +11,7 @@ from .base import EventProvider
 from .grid import grid_cs2_section
 from .hltv import find_hltv_team_rank, hltv_rankings
 from ..models import Event, EventStatus, Sport
+from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
 
 
 class PandaScoreCS2Provider(EventProvider):
@@ -57,21 +58,40 @@ class PandaScoreCS2Provider(EventProvider):
                     f"{end.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')}"
                 )
             query = urlencode(params)
-            request = Request(
-                f"{self.base_url}/{bucket}?{query}",
-                headers={
-                    "Accept": "application/json",
-                    "Authorization": f"Bearer {self.token}",
-                },
-            )
-            with urlopen(request, timeout=20) as response:
-                page_items = json.loads(response.read().decode("utf-8"))
+            cache_key = f"matches:{bucket}:{query}"
+            cached_page = get_cached_provider_payload("pandascore", cache_key)
+            if can_use_stable_pandascore_cache(bucket, end) and isinstance(cached_page, list):
+                page_items = cached_page
+            else:
+                page_items = self._fetch_bucket_page(bucket, query, cache_key)
+                if page_items is None and isinstance(cached_page, list):
+                    page_items = cached_page
+                elif page_items is None:
+                    break
             if not page_items:
                 break
             output.extend(page_items)
             if len(page_items) < 100:
                 break
         return output
+
+    def _fetch_bucket_page(self, bucket: str, query: str, cache_key: str) -> list[dict] | None:
+        request = Request(
+            f"{self.base_url}/{bucket}?{query}",
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self.token}",
+            },
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                page_items = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            return None
+        if isinstance(page_items, list):
+            upsert_provider_payload_cache("pandascore", cache_key, page_items)
+            return page_items
+        return None
 
     def _match_to_event(self, item: dict) -> Event:
         opponents = [opponent.get("opponent", {}).get("name", "") for opponent in item.get("opponents", [])]
@@ -124,6 +144,12 @@ class PandaScoreCS2Provider(EventProvider):
                 if item.get("id") == match_id:
                     return item
         return None
+
+
+def can_use_stable_pandascore_cache(bucket: str, end: datetime | None) -> bool:
+    if bucket != "past" or end is None:
+        return False
+    return end.astimezone(timezone.utc) < datetime.now(timezone.utc) - timedelta(days=2)
 
 
 def parse_pandascore_datetime(value: str | None) -> datetime | None:
