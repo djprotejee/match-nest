@@ -457,6 +457,45 @@ class ProviderMappingTests(unittest.TestCase):
         self.assertIn("Player statistics", titles)
         self.assertIn("Standings snapshot", titles)
 
+    def test_api_football_details_resolve_for_espn_event_without_manual_fixture_id(self) -> None:
+        provider = ApiFootballProvider(token="test", team_entities={"ukraine_nt": 772})
+        event = Event(
+            id="football-espn-uefa.nations-401861054",
+            title="Hungary vs Ukraine",
+            sport=Sport.FOOTBALL,
+            starts_at=datetime(2026, 9, 25, 18, 45, tzinfo=timezone.utc),
+            status=EventStatus.UPCOMING,
+            entity_ids=["ukraine_nt"],
+            source="espn",
+            competition="UEFA Nations League",
+        )
+        fixture = {
+            "fixture": {
+                "id": 42,
+                "date": "2026-09-25T18:45:00+00:00",
+                "status": {"short": "NS", "long": "Not Started"},
+            },
+            "league": {"id": 10, "season": 2026, "name": "UEFA Nations League"},
+            "teams": {"home": {"id": 1, "name": "Hungary"}, "away": {"id": 2, "name": "Ukraine"}},
+            "goals": {"home": None, "away": None},
+            "score": {},
+        }
+
+        def fake_cached_request(endpoint: str, params: dict[str, str], _max_age) -> dict:
+            if endpoint == "fixtures" and params.get("team") == "772":
+                return {"response": [fixture]}
+            if endpoint == "fixtures" and params.get("id") == "42":
+                return {"response": [fixture]}
+            return {"response": []}
+
+        with patch.object(provider, "_cached_request", side_effect=fake_cached_request):
+            details = provider.details_for_event(event.id, event)
+
+        self.assertIsNotNone(details)
+        self.assertEqual(details["source"], "api-football")
+        self.assertEqual(details["event_id"], event.id)
+        self.assertIn("Score", [section["title"] for section in details["sections"]])
+
     def test_espn_maps_future_ukraine_fixture(self) -> None:
         item = {
             "id": "401861054",

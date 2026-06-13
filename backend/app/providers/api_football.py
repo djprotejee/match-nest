@@ -153,6 +153,27 @@ class ApiFootballProvider(EventProvider):
         fixture_id = parse_api_football_event_id(event_id)
         if fixture_id is None or not self.token:
             return None
+        return self._fixture_details(event_id, fixture_id)
+
+    def details_for_event(self, event_id: str, event: Event | None) -> dict | None:
+        """Resolve rich API-Football details for any football event.
+
+        ESPN and other schedule providers can discover fixtures that API-Football
+        also knows about. This resolver avoids asking the user for ids by matching
+        the followed team, kickoff day, and team names against API-Football
+        fixtures, then reuses the same details/cache pipeline as native
+        API-Football events.
+        """
+        if not self.token:
+            return None
+        fixture_id = parse_api_football_event_id(event_id)
+        if fixture_id is None and event is not None:
+            fixture_id = self._find_fixture_id_for_event(event)
+        if fixture_id is None:
+            return None
+        return self._fixture_details(event_id, fixture_id)
+
+    def _fixture_details(self, event_id: str, fixture_id: int) -> dict | None:
         fixture_params = {"id": str(fixture_id)}
         fixture_payload = self._cached_request("fixtures", fixture_params, API_FOOTBALL_DETAILS_CACHE_TTL)
         fixtures = fixture_payload.get("response") or []
@@ -178,6 +199,32 @@ class ApiFootballProvider(EventProvider):
         raw_cache_keys = [api_football_cache_key("fixtures", fixture_params)]
         raw_cache_keys.extend(api_football_cache_key(endpoint, params) for endpoint, params in detail_requests.values())
         return api_football_details_payload(event_id, fixture, detail_payloads, raw_cache_keys)
+
+    def _find_fixture_id_for_event(self, event: Event) -> int | None:
+        if event.starts_at is None:
+            return None
+        team_entities = self.resolved_team_entities()
+        followed_team_ids = [team_entities[entity_id] for entity_id in event.entity_ids if entity_id in team_entities]
+        if not followed_team_ids:
+            return None
+        starts_at = event.starts_at.astimezone(timezone.utc)
+        start_date = (starts_at - timedelta(days=1)).date()
+        end_date = (starts_at + timedelta(days=1)).date()
+        best: tuple[int, int] | None = None
+        for team_id in followed_team_ids:
+            for season in api_football_seasons(start_date, end_date):
+                params = {
+                    "team": str(team_id),
+                    "season": str(season),
+                    "from": start_date.isoformat(),
+                    "to": end_date.isoformat(),
+                }
+                for fixture in self._cached_request("fixtures", params, API_FOOTBALL_CACHE_TTL).get("response", []):
+                    score = score_api_football_fixture_match(event, fixture)
+                    fixture_id = ((fixture.get("fixture") or {}).get("id"))
+                    if fixture_id is not None and score > 0 and (best is None or score > best[0]):
+                        best = (score, int(fixture_id))
+        return best[1] if best and best[0] >= 70 else None
 
 
 def api_football_team_entities() -> dict[str, int]:
@@ -293,6 +340,33 @@ def parse_api_football_event_id(event_id: str) -> int | None:
         return int(event_id[len(prefix) :])
     except ValueError:
         return None
+
+
+def score_api_football_fixture_match(event: Event, fixture: dict) -> int:
+    fixture_meta = fixture.get("fixture") or {}
+    date_value = fixture_meta.get("date")
+    if not date_value or event.starts_at is None:
+        return 0
+    try:
+        fixture_start = datetime.fromisoformat(str(date_value).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return 0
+    delta_hours = abs((fixture_start - event.starts_at.astimezone(timezone.utc)).total_seconds()) / 3600
+    if delta_hours > 36:
+        return 0
+    score = max(0, 36 - int(delta_hours))
+    teams = fixture.get("teams") or {}
+    names = {
+        normalize_team_name(str((teams.get("home") or {}).get("name") or "")),
+        normalize_team_name(str((teams.get("away") or {}).get("name") or "")),
+    }
+    title = normalize_team_name(event.title)
+    score += sum(25 for name in names if name and name in title)
+    competition = normalize_team_name(event.competition or "")
+    fixture_competition = normalize_team_name(str((fixture.get("league") or {}).get("name") or ""))
+    if competition and fixture_competition and (competition in fixture_competition or fixture_competition in competition):
+        score += 15
+    return score
 
 
 def api_football_details_payload(

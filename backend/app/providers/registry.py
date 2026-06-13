@@ -242,7 +242,7 @@ def fetch_event_details(event_id: str) -> dict | None:
         elif event_id.startswith("cs2-"):
             details = PandaScoreCS2Provider().details(event_id, event)
         elif event_id.startswith("football-espn-"):
-            details = EspnFootballProvider().details(event_id, event)
+            details = ApiFootballProvider().details_for_event(event_id, event) or EspnFootballProvider().details(event_id, event)
         elif event_id.startswith("football-apifootball-"):
             details = ApiFootballProvider().details(event_id)
         details = normalize_event_details(details)
