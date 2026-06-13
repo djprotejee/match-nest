@@ -25,6 +25,7 @@ from app.providers.football_data import (
     parse_entity_id_map,
     parse_entity_query_map,
 )
+from app.providers.grid import extract_grid_series_candidates, score_grid_candidate
 from app.providers.hltv import find_hltv_team_rank, parse_hltv_rankings, rank_based_tier
 from app.providers.thesportsdb import TheSportsDBFootballProvider, parse_thesportsdb_datetime
 from app.providers.pandascore import (
@@ -208,6 +209,34 @@ class ProviderMappingTests(unittest.TestCase):
         self.assertEqual(find_hltv_team_rank("NAVI", rankings).rank, 2)
         self.assertEqual(find_hltv_team_rank("Team Falcons", rankings).points, 509)
         self.assertEqual(rank_based_tier(4), "T1")
+
+    def test_grid_discovery_scores_matching_series_candidate(self) -> None:
+        match_item = {
+            "begin_at": "2026-06-11T09:00:00Z",
+            "opponents": [
+                {"opponent": {"name": "Natus Vincere"}},
+                {"opponent": {"name": "TheMongolz"}},
+            ],
+            "league": {"name": "IEM"},
+            "serie": {"full_name": "Cologne Major 2026"},
+            "tournament": {"name": "Stage 3"},
+        }
+        payload = {
+            "data": [
+                {
+                    "seriesId": 2589176,
+                    "title": "Natus Vincere vs TheMongolz",
+                    "teams": [{"name": "Natus Vincere"}, {"name": "TheMongolz"}],
+                    "tournament": "IEM Cologne Major 2026",
+                    "startTime": "2026-06-11T09:15:00Z",
+                }
+            ]
+        }
+
+        candidates = extract_grid_series_candidates(payload)
+
+        self.assertEqual(candidates[0].series_id, "2589176")
+        self.assertGreaterEqual(score_grid_candidate(match_item, candidates[0]), 78)
 
     def test_thesportsdb_maps_ukraine_senior_fixture(self) -> None:
         item = {

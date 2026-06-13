@@ -172,7 +172,7 @@ def cs2_match_details(event_id: str, item: dict) -> dict:
         cs2_score_section(item),
         cs2_hltv_section(item),
         cs2_games_section(item),
-        grid_cs2_section(event_id),
+        grid_cs2_section(event_id, item),
         cs2_stats_availability_section(item),
     ]
     return {
