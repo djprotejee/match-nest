@@ -73,7 +73,7 @@ import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, 
 
 type Tab = "timeline" | "calendar" | "explore" | "settings";
 
-const STATUS_DEFAULTS_VERSION = 4;
+const STATUS_DEFAULTS_VERSION = 5;
 const DEFAULT_VISIBLE_STATUSES: EventStatus[] = ["live", "delayed", "upcoming"];
 
 export function App() {
@@ -182,7 +182,7 @@ export function App() {
 
   async function loadTimeline() {
     const cacheKey = timelineCacheKey(range, state, feedMode, state.customFeedLevels);
-    const cached = loadCachedData(cacheKey);
+    const cached = loadCachedData(cacheKey) || loadLatestTimelineCache(range);
     if (cached && timeline.length === 0) {
       setTimeline(cached.timeline);
       setEntities(cached.entities);
@@ -233,7 +233,7 @@ export function App() {
     const month = monthCursor.getMonth() + 1;
     const levels = followLevelsForFeedMode(feedMode, state.customFeedLevels);
     const cacheKey = calendarCacheKey(year, month, levels);
-    const cached = loadCachedCalendar(cacheKey);
+    const cached = loadCachedCalendar(cacheKey) || loadLatestCalendarCache(year, month);
     if (cached) {
       setCalendarGroups(cached);
     }
@@ -2426,13 +2426,13 @@ function NavButton(props: { icon: React.ReactNode; label: string; active: boolea
 }
 
 function loadInitialTimelineCache(state: AppState): { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null {
-  return loadCachedData(timelineCacheKey("week", state, "main", state.customFeedLevels));
+  return loadCachedData(timelineCacheKey("week", state, "main", state.customFeedLevels)) || loadLatestTimelineCache("week");
 }
 
 function loadInitialCalendarCache(state: AppState): DayGroup[] | null {
   const now = new Date();
   const levels = followLevelsForFeedMode("main", state.customFeedLevels);
-  return loadCachedCalendar(calendarCacheKey(now.getFullYear(), now.getMonth() + 1, levels));
+  return loadCachedCalendar(calendarCacheKey(now.getFullYear(), now.getMonth() + 1, levels)) || loadLatestCalendarCache(now.getFullYear(), now.getMonth() + 1);
 }
 
 function loadCachedData(cacheKey: string): { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null {
@@ -2445,6 +2445,21 @@ function loadCachedData(cacheKey: string): { at: number; timeline: DayGroup[]; e
   } catch {
     return null;
   }
+}
+
+function loadLatestTimelineCache(range: RangeFilter): { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null {
+  const prefix = `${CACHE_PREFIX}${range}.`;
+  let latest: { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null = null;
+  for (const key of Object.keys(localStorage)) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const cached = loadCachedData(key);
+    if (cached && (!latest || cached.at > latest.at)) {
+      latest = cached;
+    }
+  }
+  return latest;
 }
 
 function timelineCacheKey(range: RangeFilter, state: AppState, feedMode: FeedMode, customFeedLevels: FollowLevel[]): string {
@@ -2580,6 +2595,31 @@ function loadCachedCalendar(key: string): DayGroup[] | null {
   } catch {
     return null;
   }
+}
+
+function loadLatestCalendarCache(year: number, month: number): DayGroup[] | null {
+  const prefix = `${CALENDAR_CACHE_PREFIX}${year}-${String(month).padStart(2, "0")}.`;
+  let latestAt = 0;
+  let latestGroups: DayGroup[] | null = null;
+  for (const key of Object.keys(localStorage)) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const stored = localStorage.getItem(key);
+    if (!stored) {
+      continue;
+    }
+    try {
+      const payload = JSON.parse(stored) as { at?: number; groups?: DayGroup[] };
+      if (payload.groups && (payload.at || 0) >= latestAt) {
+        latestAt = payload.at || 0;
+        latestGroups = payload.groups;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return latestGroups;
 }
 
 function readErrorMessage(error: unknown): string {
