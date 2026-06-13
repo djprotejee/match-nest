@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from app.models import Event, EventStatus, F1Session, Sport
 from app.providers.api_football import ApiFootballProvider, api_football_seasons, api_football_status
-from app.providers.espn_football import EspnFootballProvider, month_keys
+from app.providers.espn_football import EspnFootballProvider, espn_details_payload, month_keys
 from app.providers.registry import (
     dedupe_cross_source_events,
     detail_error_summary,
@@ -260,6 +260,36 @@ class ProviderMappingTests(unittest.TestCase):
         self.assertEqual(event.id, "football-espn-uefa.nations-401861054")
         self.assertIn("ukraine_nt", event.entity_ids)
         self.assertEqual(event.source, "espn")
+
+    def test_espn_details_include_match_events_when_available(self) -> None:
+        payload = {
+            "id": "401861054",
+            "date": "2026-09-25T18:45Z",
+            "competitions": [
+                {
+                    "venue": {"fullName": "Puskas Arena"},
+                    "competitors": [
+                        {"homeAway": "home", "team": {"id": "477", "displayName": "Hungary"}, "score": "1"},
+                        {"homeAway": "away", "team": {"id": "457", "displayName": "Ukraine"}, "score": "2"},
+                    ],
+                    "details": [
+                        {
+                            "clock": {"displayValue": "67'"},
+                            "team": {"displayName": "Ukraine"},
+                            "type": {"text": "Goal"},
+                            "text": "Goal by Ukraine",
+                        }
+                    ],
+                }
+            ],
+            "status": {"type": {"state": "post", "completed": True, "description": "Final"}},
+        }
+
+        details = espn_details_payload("football-espn-uefa.nations-401861054", payload, "uefa.nations")
+
+        self.assertEqual(details["sport"], "football")
+        self.assertEqual(details["summary"], "Hungary 1-2 Ukraine")
+        self.assertEqual(details["sections"][1]["rows"][0][2], "Goal")
 
     def test_espn_month_keys_cover_range(self) -> None:
         self.assertEqual(

@@ -236,6 +236,8 @@ def fetch_event_details(event_id: str) -> dict | None:
             details = F4CalendarProvider().details(event_id)
         elif event_id.startswith("cs2-"):
             details = PandaScoreCS2Provider().details(event_id, get_event(event_id))
+        elif event_id.startswith("football-espn-"):
+            details = EspnFootballProvider().details(event_id, get_event(event_id))
         if details and details.get("source") != "matchnest":
             upsert_event_details_cache(event_id, str(details.get("source") or "unknown"), details)
         return details or cached
@@ -257,10 +259,10 @@ def fetch_event_details(event_id: str) -> dict | None:
 
 def detail_error_summary(event_id: str, exc: Exception) -> str:
     message = str(exc)
-    if event_id.startswith("f1-") and ("403" in message or "Forbidden" in message):
+    if event_id.startswith("f1-") and ("403" in message or "Forbidden" in message or "404" in message):
         return (
             "Session classification is not available yet, or the upstream timing provider "
-            "temporarily refused access. Try again later."
+            "has not published it. Try again later."
         )
     if event_id.startswith("f1-") and ("DataNotLoadedError" in message or "not been loaded" in message):
         return "Session timing data has not been published by the upstream provider yet. Try again later."
@@ -273,6 +275,8 @@ def detail_error_message(exc: Exception) -> str:
         return exc.__class__.__name__
     if "403" in message or "Forbidden" in message:
         return "Upstream provider returned 403 Forbidden."
+    if "404" in message:
+        return "Upstream provider has not published this session payload yet."
     if "DataNotLoadedError" in message or "not been loaded" in message:
         return "Upstream timing data is not loaded yet."
     return message

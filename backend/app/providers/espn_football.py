@@ -76,6 +76,17 @@ class EspnFootballProvider(EventProvider):
             upsert_provider_payload_cache("espn-football", cache_key, payload)
         return payload.get("events") or []
 
+    def details(self, event_id: str, event: Event | None = None) -> dict | None:
+        parsed = parse_espn_event_id(event_id)
+        if parsed is None:
+            return None
+        league_slug, espn_event_id = parsed
+        month_key = event.starts_at.astimezone(timezone.utc).strftime("%Y%m") if event and event.starts_at else datetime.now(timezone.utc).strftime("%Y%m")
+        item = next((entry for entry in self._scoreboard(league_slug, month_key) if str(entry.get("id")) == espn_event_id), None)
+        if item is None:
+            return None
+        return espn_details_payload(event_id, item, league_slug)
+
     def _should_keep_event(self, item: dict, event: Event) -> bool:
         if any(entity_id in event.entity_ids for entity_id in self.competition_entities):
             return True
@@ -204,6 +215,91 @@ def espn_score_summary(item: dict, home: dict, away: dict) -> str | None:
     if home.get("score") is None or away.get("score") is None:
         return None
     return f"{home['name']} {home['score']}-{away['score']} {away['name']}"
+
+
+def parse_espn_event_id(event_id: str) -> tuple[str, str] | None:
+    prefix = "football-espn-"
+    if not event_id.startswith(prefix):
+        return None
+    tail = event_id[len(prefix) :]
+    if "-" not in tail:
+        return None
+    league_slug, espn_event_id = tail.rsplit("-", 1)
+    if not league_slug or not espn_event_id:
+        return None
+    return league_slug, espn_event_id
+
+
+def espn_details_payload(event_id: str, item: dict, league_slug: str) -> dict:
+    competitors = espn_competitors(item)
+    home = next((team for team in competitors if team["home_away"] == "home"), competitors[0] if competitors else {})
+    away = next((team for team in competitors if team["home_away"] == "away"), competitors[1] if len(competitors) > 1 else {})
+    competition = espn_competition_name(item, league_slug)
+    status = item.get("status", {}).get("type", {})
+    competitions = item.get("competitions") or []
+    competition_payload = competitions[0] if competitions else {}
+    venue = competition_payload.get("venue") or {}
+    facts = [
+        {"label": "Competition", "value": competition},
+        {"label": "Status", "value": str(status.get("description") or status.get("detail") or status.get("state") or "-")},
+    ]
+    if venue.get("fullName"):
+        facts.append({"label": "Venue", "value": str(venue["fullName"])})
+    if item.get("date"):
+        facts.append({"label": "Kickoff", "value": str(item["date"])})
+
+    sections = [
+        {
+            "title": "Teams",
+            "columns": ["Side", "Team", "Score"],
+            "rows": [
+                [str(home.get("home_away") or "home"), str(home.get("name") or "-"), str(home.get("score") or "-")],
+                [str(away.get("home_away") or "away"), str(away.get("name") or "-"), str(away.get("score") or "-")],
+            ],
+        }
+    ]
+    details_rows = espn_match_detail_rows(competition_payload)
+    if details_rows:
+        sections.append(
+            {
+                "title": "Match events",
+                "columns": ["Time", "Team", "Type", "Details"],
+                "rows": details_rows,
+            }
+        )
+    else:
+        sections.append(
+            {
+                "title": "Match events",
+                "columns": ["Info"],
+                "rows": [["Detailed match events are not available from the current ESPN payload yet."]],
+            }
+        )
+
+    summary = espn_score_summary(item, home, away) or f"{home.get('name', 'Home')} vs {away.get('name', 'Away')}"
+    return {
+        "event_id": event_id,
+        "sport": "football",
+        "source": "espn",
+        "summary": summary,
+        "facts": facts,
+        "sections": sections,
+    }
+
+
+def espn_match_detail_rows(competition_payload: dict) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for detail in competition_payload.get("details") or []:
+        team = detail.get("team") or {}
+        rows.append(
+            [
+                str(detail.get("clock", {}).get("displayValue") or detail.get("time") or "-"),
+                str(team.get("displayName") or team.get("name") or "-"),
+                str(detail.get("type", {}).get("text") or detail.get("type") or "-"),
+                str(detail.get("text") or detail.get("headline") or "-"),
+            ]
+        )
+    return rows
 
 
 def event_in_range(event: Event, start: datetime, end: datetime) -> bool:
