@@ -8,10 +8,14 @@ from html import unescape
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
+
 
 HLTV_RANKING_URL = "https://www.hltv.org/ranking/teams"
 HLTV_CACHE_TTL = timedelta(hours=12)
 HLTV_CACHE_PATH = Path(__file__).resolve().parents[2] / ".cache" / "hltv-ranking.json"
+HLTV_PROVIDER = "hltv"
+HLTV_CACHE_KEY = "team-ranking:current"
 
 
 @dataclass(frozen=True)
@@ -28,8 +32,12 @@ class HltvTeamRank:
 
 
 def hltv_rankings() -> dict[str, HltvTeamRank]:
+    db_cached = read_hltv_db_cache()
+    if db_cached:
+        return db_cached
     cached = read_hltv_cache()
     if cached:
+        write_hltv_db_cache(cached)
         return cached
     try:
         request = Request(
@@ -45,10 +53,12 @@ def hltv_rankings() -> dict[str, HltvTeamRank]:
         rankings = parse_hltv_rankings(html, source_url)
         if rankings:
             write_hltv_cache(rankings)
+            write_hltv_db_cache(rankings)
             return rankings
     except Exception:
-        return read_hltv_cache(ignore_ttl=True)
-    return {}
+        stale = read_hltv_db_cache(ignore_ttl=True) or read_hltv_cache(ignore_ttl=True)
+        return stale or {}
+    return read_hltv_db_cache(ignore_ttl=True) or read_hltv_cache(ignore_ttl=True) or {}
 
 
 def find_hltv_team_rank(team_name: str, rankings: dict[str, HltvTeamRank] | None = None) -> HltvTeamRank | None:
@@ -153,3 +163,33 @@ def write_hltv_cache(rankings: dict[str, HltvTeamRank]) -> None:
         "teams": {key: asdict(value) for key, value in rankings.items()},
     }
     HLTV_CACHE_PATH.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def read_hltv_db_cache(ignore_ttl: bool = False) -> dict[str, HltvTeamRank]:
+    payload = get_cached_provider_payload(HLTV_PROVIDER, HLTV_CACHE_KEY)
+    if not isinstance(payload, dict):
+        return {}
+    try:
+        fetched_at = datetime.fromisoformat(payload["fetched_at"]).astimezone(timezone.utc)
+        if not ignore_ttl and datetime.now(timezone.utc) - fetched_at > HLTV_CACHE_TTL:
+            return {}
+        return {
+            key: HltvTeamRank(
+                name=value["name"],
+                rank=int(value["rank"]),
+                points=int(value["points"]),
+                source_url=value["source_url"],
+                fetched_at=value["fetched_at"],
+            )
+            for key, value in payload.get("teams", {}).items()
+        }
+    except Exception:
+        return {}
+
+
+def write_hltv_db_cache(rankings: dict[str, HltvTeamRank]) -> None:
+    payload = {
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "teams": {key: asdict(value) for key, value in rankings.items()},
+    }
+    upsert_provider_payload_cache(HLTV_PROVIDER, HLTV_CACHE_KEY, payload)

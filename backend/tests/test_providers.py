@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.models import Event, EventStatus, F1Session, Sport
-from app.providers.api_football import ApiFootballProvider, api_football_seasons, api_football_status
+from app.providers.api_football import ApiFootballProvider, api_football_details_payload, api_football_seasons, api_football_status
 from app.providers.espn_football import EspnFootballProvider, espn_details_payload, month_keys
 from app.providers.registry import (
     dedupe_cross_source_events,
@@ -29,6 +29,7 @@ from app.providers.hltv import find_hltv_team_rank, parse_hltv_rankings, rank_ba
 from app.providers.thesportsdb import TheSportsDBFootballProvider, parse_thesportsdb_datetime
 from app.providers.pandascore import (
     cs2_entity_ids,
+    cs2_match_summary,
     cs2_score_section,
     cs2_score_summary,
     cs2_status,
@@ -238,6 +239,103 @@ class ProviderMappingTests(unittest.TestCase):
             [2026, 2027],
         )
 
+    def test_api_football_details_include_lineups_stats_and_standings(self) -> None:
+        fixture = {
+            "fixture": {
+                "id": 42,
+                "status": {"short": "FT", "long": "Match Finished"},
+                "venue": {"name": "Arena", "city": "Kyiv"},
+            },
+            "league": {"id": 10, "season": 2026, "name": "UEFA Nations League", "round": "Round 1"},
+            "teams": {"home": {"id": 1, "name": "Hungary"}, "away": {"id": 2, "name": "Ukraine"}},
+            "goals": {"home": 1, "away": 2},
+            "score": {"fulltime": {"home": 1, "away": 2}, "halftime": {"home": 0, "away": 1}},
+        }
+
+        details = api_football_details_payload(
+            "football-apifootball-42",
+            fixture,
+            {
+                "events": {
+                    "response": [
+                        {
+                            "time": {"elapsed": 67},
+                            "team": {"name": "Ukraine"},
+                            "type": "Goal",
+                            "detail": "Normal Goal",
+                            "player": {"name": "Player"},
+                            "assist": {"name": "Assist"},
+                        }
+                    ]
+                },
+                "lineups": {
+                    "response": [
+                        {
+                            "team": {"name": "Ukraine"},
+                            "formation": "4-3-3",
+                            "startXI": [{"player": {"number": 7, "name": "Player", "pos": "F"}}],
+                        }
+                    ]
+                },
+                "statistics": {
+                    "response": [
+                        {"team": {"name": "Hungary"}, "statistics": [{"type": "Shots on Goal", "value": 3}]},
+                        {"team": {"name": "Ukraine"}, "statistics": [{"type": "Shots on Goal", "value": 5}]},
+                    ]
+                },
+                "players": {
+                    "response": [
+                        {
+                            "team": {"name": "Ukraine"},
+                            "players": [
+                                {
+                                    "player": {"number": 7, "name": "Player"},
+                                    "statistics": [
+                                        {
+                                            "games": {"position": "F", "minutes": 90, "rating": "7.4"},
+                                            "goals": {"total": 1, "assists": 0},
+                                            "passes": {"key": 2},
+                                            "duels": {"won": 4},
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ]
+                },
+                "standings": {
+                    "response": [
+                        {
+                            "league": {
+                                "standings": [
+                                    [
+                                        {
+                                            "rank": 2,
+                                            "team": {"id": 2, "name": "Ukraine"},
+                                            "points": 6,
+                                            "all": {
+                                                "played": 3,
+                                                "win": 2,
+                                                "draw": 0,
+                                                "lose": 1,
+                                                "goals": {"for": 5, "against": 3},
+                                            },
+                                        }
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                },
+            },
+        )
+
+        titles = [section["title"] for section in details["sections"]]
+        self.assertIn("Lineups", titles)
+        self.assertIn("Team statistics", titles)
+        self.assertIn("Player statistics", titles)
+        self.assertIn("Standings snapshot", titles)
+
     def test_espn_maps_future_ukraine_fixture(self) -> None:
         item = {
             "id": "401861054",
@@ -367,6 +465,25 @@ class ProviderMappingTests(unittest.TestCase):
         }
 
         self.assertEqual(cs2_score_summary(item, "NAVI vs Spirit"), "2-1")
+
+    def test_cs2_match_summary_avoids_redundant_winner_and_status_text(self) -> None:
+        item = {
+            "status": "finished",
+            "winner": {"name": "Natus Vincere"},
+            "league": {"name": "IEM"},
+            "serie": {"full_name": "Cologne Major 2026"},
+            "opponents": [
+                {"opponent": {"id": 1, "name": "Natus Vincere"}},
+                {"opponent": {"id": 2, "name": "TheMongolz"}},
+            ],
+            "results": [{"team_id": 1, "score": 2}, {"team_id": 2, "score": 1}],
+        }
+
+        summary = cs2_match_summary(item, "Natus Vincere vs TheMongolz")
+
+        self.assertIn("2-1", summary)
+        self.assertNotIn("winner", summary)
+        self.assertNotIn("status", summary)
 
     def test_cs2_score_section_keeps_hltv_rank_separate(self) -> None:
         item = {

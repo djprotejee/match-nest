@@ -170,6 +170,7 @@ def cs2_match_details(event_id: str, item: dict) -> dict:
     facts = cs2_match_facts(item)
     sections = [
         cs2_score_section(item),
+        cs2_hltv_section(item),
         cs2_games_section(item),
         grid_cs2_section(event_id),
         cs2_stats_availability_section(item),
@@ -190,18 +191,13 @@ def cs2_match_title(item: dict) -> str:
 
 
 def cs2_match_summary(item: dict, title: str) -> str:
-    status = item.get("status", "unknown")
     competition = cs2_competition_name(item)
     score = cs2_score_summary(item, title)
-    winner = (item.get("winner") or {}).get("name")
     parts = [title]
     if score:
         parts.append(score)
-    if winner:
-        parts.append(f"winner: {winner}")
     if competition:
         parts.append(competition)
-    parts.append(f"status: {status}")
     return " | ".join(parts)
 
 
@@ -237,6 +233,28 @@ def cs2_score_section(item: dict) -> dict | None:
             ]
         )
     return {"title": "Match score", "columns": ["Tag", "Team", "Score", "HLTV", "HLTV pts", "Tier", "Country"], "rows": rows}
+
+
+def cs2_hltv_section(item: dict) -> dict | None:
+    opponents = [opponent.get("opponent", {}) for opponent in item.get("opponents", [])]
+    rankings = hltv_rankings()
+    rows = []
+    for opponent in opponents:
+        name = str(opponent.get("name") or "-")
+        rank = find_hltv_team_rank(name, rankings)
+        rows.append(
+            [
+                str(opponent.get("acronym") or short_team_tag(name)),
+                name,
+                hltv_rank_text(rank),
+                hltv_points_text(rank),
+                rank.tier if rank else "-",
+                "HLTV ranking cache" if rank else "No cached HLTV match",
+            ]
+        )
+    if not rows:
+        return None
+    return {"title": "HLTV ranking", "columns": ["Tag", "Team", "Rank", "Pts", "Tier", "Source"], "rows": rows}
 
 
 def cs2_games_section(item: dict) -> dict | None:
@@ -278,10 +296,7 @@ def cs2_grid_stats_note() -> str:
     if os.getenv("GRID_SERIES_IDS", "").strip():
         return "GRID token and manual series bindings are configured. Open a mapped match to load cached GRID end-state stats."
     if os.getenv("GRID_API_TOKEN", "").strip():
-        return (
-            "GRID token is configured, but this MatchNest event is not linked to a GRID series id yet. "
-            "Add this event id to GRID_SERIES_IDS when you know the GRID series id."
-        )
+        return "Token configured. Waiting for automatic GRID series lookup or a mapped series id."
     return "GRID token is not configured. Add GRID_API_TOKEN to enable the future CS2 stats provider."
 
 
