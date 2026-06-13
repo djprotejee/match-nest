@@ -9,6 +9,7 @@ import {
   Search,
   Settings,
   Star,
+  Trophy,
   User,
   WifiOff,
 } from "lucide-react";
@@ -29,6 +30,8 @@ import {
   fetchGoogleLoginUrl,
   fetchNotificationSettings,
   fetchTimeline,
+  fetchTournamentDetail,
+  fetchTournaments,
   loginAccount,
   logoutAccount,
   registerAccount,
@@ -69,9 +72,9 @@ import {
 } from "./dateUtils";
 import { fallbackEntities, fallbackTimeline } from "./demoData";
 import { appendManualPins, filterGroups, findConflicts, flattenGroups, followLevelsForFeedMode, mergeFollowOverrides } from "./eventFilters";
-import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, EventStatus, FollowLevel, MatchEvent, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport } from "./types";
+import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, EventStatus, FollowLevel, MatchEvent, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport, TournamentDetail, TournamentSummary } from "./types";
 
-type Tab = "timeline" | "calendar" | "explore" | "settings";
+type Tab = "timeline" | "calendar" | "tournament" | "explore" | "settings";
 
 const STATUS_DEFAULTS_VERSION = 5;
 const DEFAULT_VISIBLE_STATUSES: EventStatus[] = ["live", "delayed", "upcoming"];
@@ -591,6 +594,22 @@ export function App() {
         />
       ) : null}
 
+      {tab === "tournament" ? (
+        <TournamentScreen
+          categories={state.categories}
+          feedMode={feedMode}
+          customFeedLevels={state.customFeedLevels}
+          statuses={calendarStatuses}
+          sports={sports}
+          hideSpoilers={state.hideSpoilers}
+          watch={state.watch}
+          revealed={state.revealed}
+          onWatch={setWatch}
+          onReveal={toggleReveal}
+          onRemoveManual={removeManualPin}
+        />
+      ) : null}
+
       {tab === "explore" ? (
         <ExploreScreen
           entities={allEntities}
@@ -620,6 +639,7 @@ export function App() {
       <nav className="bottom-nav" aria-label="Primary navigation">
         <NavButton icon={<ListChecks size={20} />} label="Timeline" active={tab === "timeline"} onClick={() => setTab("timeline")} />
         <NavButton icon={<CalendarDays size={20} />} label="Calendar" active={tab === "calendar"} onClick={() => setTab("calendar")} />
+        <NavButton icon={<Trophy size={20} />} label="Tournament" active={tab === "tournament"} onClick={() => setTab("tournament")} />
         <NavButton icon={<Search size={20} />} label="Explore" active={tab === "explore"} onClick={() => setTab("explore")} />
         <NavButton icon={<Settings size={20} />} label="Settings" active={tab === "settings"} onClick={() => setTab("settings")} />
       </nav>
@@ -1028,6 +1048,147 @@ function CalendarScreen(props: {
       />
     </main>
   );
+}
+
+function TournamentScreen(props: {
+  categories: FollowCategory[];
+  feedMode: FeedMode;
+  customFeedLevels: FollowLevel[];
+  statuses: Set<EventStatus>;
+  sports: Set<Sport>;
+  hideSpoilers: boolean;
+  watch: Record<string, WatchStatus>;
+  revealed: Record<string, boolean>;
+  onWatch: (eventId: string, value: WatchStatus) => void;
+  onReveal: (eventId: string) => void;
+  onRemoveManual: (eventId: string) => void;
+}) {
+  const levels = useMemo(
+    () => followLevelsForFeedMode(props.feedMode, props.customFeedLevels),
+    [props.feedMode, props.customFeedLevels],
+  );
+  const [tournaments, setTournaments] = useState<TournamentSummary[]>([]);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [detail, setDetail] = useState<TournamentDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const visibleTournaments = useMemo(
+    () => tournaments.filter((tournament) => props.sports.has(tournament.sport)),
+    [tournaments, props.sports],
+  );
+  const selectedGroups = useMemo(
+    () =>
+      detail
+        ? groupEventsForTournament(
+            detail.events.filter((event) => props.sports.has(event.sport) && props.statuses.has(event.status)),
+          )
+        : [],
+    [detail, props.sports, props.statuses],
+  );
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    fetchTournaments(levels)
+      .then((items) => {
+        setTournaments(items);
+        setSelectedKey((current) => current || items[0]?.key || null);
+      })
+      .catch((nextError) => setError(readErrorMessage(nextError)))
+      .finally(() => setLoading(false));
+  }, [levels]);
+
+  useEffect(() => {
+    if (!selectedKey) {
+      setDetail(null);
+      return;
+    }
+    setDetailLoading(true);
+    setError(null);
+    fetchTournamentDetail(selectedKey, levels, !props.hideSpoilers)
+      .then(setDetail)
+      .catch((nextError) => setError(readErrorMessage(nextError)))
+      .finally(() => setDetailLoading(false));
+  }, [selectedKey, levels, props.hideSpoilers]);
+
+  return (
+    <main className="screen">
+      <section className="tournament-header">
+        <div>
+          <p className="eyebrow">Tournament hub</p>
+          <h2>Standings, brackets and tournament context</h2>
+        </div>
+        {loading ? <span>Refreshing...</span> : <span>{visibleTournaments.length} tournaments</span>}
+      </section>
+
+      {error ? <div className="auth-error">{error}</div> : null}
+
+      <section className="tournament-grid" aria-label="Tournament list">
+        {visibleTournaments.map((tournament) => (
+          <button
+            className={`tournament-card sport-border-${tournament.sport} ${selectedKey === tournament.key ? "is-active" : ""}`}
+            key={tournament.key}
+            type="button"
+            onClick={() => setSelectedKey(tournament.key)}
+          >
+            <span className={`sport-tag sport-${tournament.sport}`}>{sportLabel(tournament.sport)}</span>
+            <strong>{tournament.name}</strong>
+            <span>
+              {tournament.event_count} events · {categoryForLevel(props.categories, tournament.follow_level).name}
+            </span>
+            {tournament.next_event ? (
+              <small>
+                Next: {formatEventTimeForEvent(tournament.next_event)} · {tournament.next_event.title}
+              </small>
+            ) : null}
+          </button>
+        ))}
+      </section>
+
+      {detailLoading ? <div className="loading-card">Refreshing tournament snapshot...</div> : null}
+
+      {detail ? (
+        <section className="details-panel tournament-detail">
+          <div className="tournament-detail-heading">
+            <div>
+              <p className="eyebrow">{sportLabel(detail.sport)}</p>
+              <h2>{detail.name}</h2>
+            </div>
+            <span>{detail.event_count} events</span>
+          </div>
+          {detail.sections.map((section) => (
+            <SortableDetailsTable section={section} key={section.title} />
+          ))}
+        </section>
+      ) : null}
+
+      <EventGroups
+        groups={selectedGroups}
+        categories={props.categories}
+        watch={props.watch}
+        revealed={props.revealed}
+        onWatch={props.onWatch}
+        onReveal={props.onReveal}
+        onRemoveManual={props.onRemoveManual}
+      />
+    </main>
+  );
+}
+
+function groupEventsForTournament(events: MatchEvent[]): DayGroup[] {
+  const grouped = new Map<string, MatchEvent[]>();
+  for (const event of events) {
+    const dateKey = event.starts_at ? localDateKey(new Date(event.starts_at)) : "tbd";
+    grouped.set(dateKey, [...(grouped.get(dateKey) || []), event]);
+  }
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, groupEvents]) => ({
+      date,
+      events: groupEvents.sort((left, right) => (left.starts_at || "").localeCompare(right.starts_at || "")),
+    }));
 }
 
 function ExploreScreen({

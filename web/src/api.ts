@@ -1,4 +1,4 @@
-import type { AccountSettings, AuthResponse, AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, FollowLevel, MatchEvent, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport } from "./types";
+import type { AccountSettings, AuthResponse, AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, FollowLevel, MatchEvent, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport, TournamentDetail, TournamentSummary } from "./types";
 
 const DEFAULT_API_URL = import.meta.env.DEV ? `${window.location.origin}/api/` : `${window.location.origin}/`;
 const AUTH_TOKEN_KEY = "matchnest.auth.token";
@@ -110,6 +110,22 @@ export async function fetchEvent(eventId: string, revealSpoilers = false): Promi
   const url = apiUrl(`events/${eventId}`);
   url.searchParams.set("reveal_spoilers", revealSpoilers ? "true" : "false");
   return getJson<MatchEvent>(url);
+}
+
+export async function fetchTournaments(levels: FollowLevel[] = ["main", "starred"], sport?: Sport): Promise<TournamentSummary[]> {
+  const url = apiUrl("tournaments");
+  url.searchParams.set("level", levels.join(","));
+  if (sport) {
+    url.searchParams.set("sport", sport);
+  }
+  return getJson<TournamentSummary[]>(url);
+}
+
+export async function fetchTournamentDetail(key: string, levels: FollowLevel[] = ["main", "starred"], revealSpoilers = false): Promise<TournamentDetail> {
+  const url = apiUrl(`tournaments/${encodeURIComponent(key)}`);
+  url.searchParams.set("level", levels.join(","));
+  url.searchParams.set("reveal_spoilers", revealSpoilers ? "true" : "false");
+  return getJson<TournamentDetail>(url);
 }
 
 export async function saveFollowLevel(entityId: string, level: FollowLevel): Promise<void> {

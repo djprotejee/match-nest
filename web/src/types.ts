@@ -81,6 +81,21 @@ export interface EventDetails {
   raw_payload_cache_keys?: string[];
 }
 
+export interface TournamentSummary {
+  key: string;
+  name: string;
+  sport: Sport;
+  event_count: number;
+  priority: number;
+  follow_level: FollowLevel;
+  next_event: MatchEvent | null;
+}
+
+export interface TournamentDetail extends TournamentSummary {
+  events: MatchEvent[];
+  sections: EventDetailsSection[];
+}
+
 export interface AuthUser {
   id: number;
   email: string;

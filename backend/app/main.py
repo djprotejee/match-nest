@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from .emailer import send_verification_email
 from .entity_service import default_entity_color, entity_bindings_from_payload, entity_payload, provider_search_candidates
-from .models import EntityKind, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserAccount
+from .models import EntityKind, Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserAccount
 from .notifications import dispatch_due_notifications, notification_settings_payload, push_config, rule_payload
 from .providers.registry import fetch_event_details, fetch_events, provider_results
 from .service import (
@@ -480,6 +480,83 @@ def is_spoiler_sensitive_section(section: dict) -> bool:
     return any(token in title for token in SPOILER_SENSITIVE_SECTION_TOKENS)
 
 
+def tournament_key_for_event(event: Event) -> str:
+    competition = event.competition or ("Formula 1" if event.sport == Sport.FORMULA else "Unassigned")
+    slug = "".join(char.lower() if char.isalnum() else "-" for char in competition)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return f"{event.sport.value}:{slug.strip('-') or 'unassigned'}"
+
+
+def tournament_summaries(events: list[Event], preferences) -> list[dict]:
+    groups: dict[str, list[Event]] = {}
+    for event in events:
+        groups.setdefault(tournament_key_for_event(event), []).append(event)
+    summaries = [tournament_summary(group, preferences) for group in groups.values()]
+    return sorted(summaries, key=lambda item: (-item["priority"], item["sport"], item["name"]))
+
+
+def tournament_summary(events: list[Event], preferences) -> dict:
+    ordered = sorted(events, key=lambda event: (event.starts_at is None, event.starts_at or datetime.max.replace(tzinfo=timezone.utc)))
+    first = ordered[0]
+    next_event = next((event for event in ordered if effective_event_status(event) in {EventStatus.LIVE, EventStatus.DELAYED, EventStatus.UPCOMING, EventStatus.TBD}), None)
+    levels = {visible_follow_level(event, preferences) for event in ordered}
+    return {
+        "key": tournament_key_for_event(first),
+        "name": first.competition or ("Formula 1" if first.sport == Sport.FORMULA else "Unassigned"),
+        "sport": first.sport.value,
+        "event_count": len(ordered),
+        "priority": max(event.importance for event in ordered),
+        "follow_level": "main" if FollowLevel.MAIN.value in levels else "starred" if FollowLevel.STARRED.value in levels else sorted(levels)[0],
+        "next_event": serialize_event(next_event, preferences) if next_event else None,
+    }
+
+
+def tournament_snapshot_sections(events: list[Event], preferences, reveal_spoilers: bool) -> list[dict]:
+    now = datetime.now(KYIV_TZ)
+
+    def snapshot_candidate_key(event: Event) -> tuple[int, float]:
+        status = effective_event_status(event)
+        event_time = event.starts_at or now
+        distance = abs((event_time - now).total_seconds())
+        if status in {EventStatus.LIVE, EventStatus.DELAYED}:
+            return (0, distance)
+        if status == EventStatus.PAST:
+            return (1, distance)
+        if status == EventStatus.UPCOMING:
+            return (2, distance)
+        return (3, distance)
+
+    candidates = sorted(
+        events,
+        key=snapshot_candidate_key,
+    )
+    for event in candidates[:12]:
+        details = fetch_event_details(event.id)
+        if not details:
+            continue
+        safe_details = spoiler_safe_event_details(details, event, preferences, reveal_spoilers)
+        sections = [
+            section
+            for section in safe_details.get("sections", [])
+            if is_tournament_snapshot_section(section)
+        ]
+        if sections:
+            return sections
+    return [
+        {
+            "title": "Tournament snapshot",
+            "columns": ["Info"],
+            "rows": [["Standings or bracket data are not available from the configured providers yet."]],
+        }
+    ]
+
+
+def is_tournament_snapshot_section(section: dict) -> bool:
+    title = str(section.get("title") or "").lower()
+    return any(token in title for token in {"standings", "bracket", "stage"})
+
+
 @app.get("/events/{event_id}")
 def event_by_id(
     event_id: str,
@@ -491,6 +568,57 @@ def event_by_id(
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found.")
     return serialize_event(event, preferences, reveal_spoilers)
+
+
+@app.get("/tournaments")
+def tournaments(
+    sport: str | None = None,
+    level: str | None = "main,starred",
+    current_user: UserAccount | None = Depends(optional_user),
+) -> list[dict]:
+    preferences = preferences_for_user(current_user.id if current_user else None)
+    start = datetime.now(KYIV_TZ) - timedelta(days=120)
+    end = datetime.now(KYIV_TZ) + timedelta(days=365)
+    filtered = filter_events(
+        fetch_events(start, end, preferences),
+        preferences,
+        start=start,
+        end=end,
+        levels=parse_level_set(level),
+        sports=parse_enum_set(sport, Sport),
+        apply_f1_session_filter=False,
+    )
+    return tournament_summaries(filtered, preferences)
+
+
+@app.get("/tournaments/{tournament_key}")
+def tournament_detail(
+    tournament_key: str,
+    level: str | None = "main,starred",
+    reveal_spoilers: bool = False,
+    current_user: UserAccount | None = Depends(optional_user),
+) -> dict:
+    preferences = preferences_for_user(current_user.id if current_user else None)
+    start = datetime.now(KYIV_TZ) - timedelta(days=120)
+    end = datetime.now(KYIV_TZ) + timedelta(days=365)
+    filtered = filter_events(
+        fetch_events(start, end, preferences),
+        preferences,
+        start=start,
+        end=end,
+        levels=parse_level_set(level),
+        apply_f1_session_filter=False,
+    )
+    events = [event for event in filtered if tournament_key_for_event(event) == tournament_key]
+    if not events:
+        raise HTTPException(status_code=404, detail="Tournament not found.")
+    events = sorted(events, key=lambda event: (event.starts_at is None, event.starts_at or datetime.max.replace(tzinfo=timezone.utc)))
+    sections = tournament_snapshot_sections(events, preferences, reveal_spoilers)
+    return {
+        **tournament_summary(events, preferences),
+        "events": [serialize_event(event, preferences, reveal_spoilers) for event in events[:80]],
+        "sections": sections,
+    }
 
 
 @app.get("/timeline")

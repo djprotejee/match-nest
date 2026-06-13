@@ -203,6 +203,64 @@ h2 {
   gap: 16px;
 }
 
+.tournament-header,
+.tournament-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tournament-header span,
+.tournament-detail-heading span {
+  color: #bfd0e8;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.tournament-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.tournament-card {
+  display: grid;
+  gap: 8px;
+  min-height: 118px;
+  padding: 12px;
+  border: 1px solid #303545;
+  border-radius: 8px;
+  background: #1b1e26;
+  color: #e8eaf0;
+  text-align: left;
+}
+
+.tournament-card.is-active {
+  border-color: #ff8a3d;
+  background: rgba(255, 138, 61, 0.1);
+}
+
+.tournament-card strong {
+  font-size: 0.98rem;
+}
+
+.tournament-card span,
+.tournament-card small {
+  color: #9aa3b2;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.tournament-card .sport-tag {
+  width: max-content;
+}
+
+.tournament-detail {
+  display: grid;
+  gap: 12px;
+}
+
 .controls {
   display: grid;
   gap: 12px;

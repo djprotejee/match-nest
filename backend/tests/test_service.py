@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from app.models import Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserPreferences
 from app.seed import DEFAULT_PREFERENCES, demo_events
 from app.service import effective_event_status, filter_events, month_range, serialize_event, visible_follow_level
-from app.main import spoiler_safe_event_details
+from app.main import spoiler_safe_event_details, tournament_snapshot_sections, tournament_summary
 
 
 class ServiceTests(unittest.TestCase):
@@ -194,6 +194,56 @@ class ServiceTests(unittest.TestCase):
             self.assertIn("f1-practice-demo", ids)
         finally:
             DEFAULT_PREFERENCES.f1_sessions.discard(F1Session.PRACTICE)
+
+    def test_tournament_summary_groups_by_competition(self) -> None:
+        events = [
+            Event(
+                id="football-1",
+                title="Hungary vs Ukraine",
+                sport=Sport.FOOTBALL,
+                starts_at=self.now,
+                status=EventStatus.UPCOMING,
+                entity_ids=["ukraine_nt"],
+                source="espn",
+                competition="UEFA Nations League",
+                importance=86,
+            ),
+            Event(
+                id="football-2",
+                title="Ukraine vs Iceland",
+                sport=Sport.FOOTBALL,
+                starts_at=self.now + timedelta(days=3),
+                status=EventStatus.UPCOMING,
+                entity_ids=["ukraine_nt"],
+                source="espn",
+                competition="UEFA Nations League",
+                importance=80,
+            ),
+        ]
+        preferences = UserPreferences(follows={"ukraine_nt": Follow("ukraine_nt", "main")})
+
+        summary = tournament_summary(events, preferences)
+
+        self.assertEqual(summary["name"], "UEFA Nations League")
+        self.assertEqual(summary["sport"], "football")
+        self.assertEqual(summary["event_count"], 2)
+        self.assertEqual(summary["follow_level"], "main")
+
+    def test_tournament_snapshot_has_product_fallback(self) -> None:
+        event = Event(
+            id="football-no-details",
+            title="Hungary vs Ukraine",
+            sport=Sport.FOOTBALL,
+            starts_at=self.now,
+            status=EventStatus.UPCOMING,
+            entity_ids=["ukraine_nt"],
+            source="espn",
+            competition="UEFA Nations League",
+        )
+
+        sections = tournament_snapshot_sections([event], UserPreferences(), False)
+
+        self.assertEqual(sections[0]["title"], "Tournament snapshot")
 
     def test_api_payload_can_include_practice_for_client_filtering(self) -> None:
         filtered = filter_events(
