@@ -32,6 +32,8 @@ services:
         sync: false
       - key: VAPID_SUBJECT
         sync: false
+      - key: NOTIFICATION_DISPATCH_TOKEN
+        sync: false
       - key: APP_PUBLIC_URL
         sync: false
       - key: SMTP_HOST

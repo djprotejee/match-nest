@@ -426,6 +426,15 @@ def authenticate_user(email: str, password: str) -> UserAccount | None:
     return user_from_row(row)
 
 
+def list_user_ids() -> list[int]:
+    connection = connect()
+    try:
+        rows = connection.execute("SELECT id FROM users ORDER BY id").fetchall()
+        return [int(row["id"]) for row in rows]
+    finally:
+        connection.close()
+
+
 def create_session(user_id: int) -> str:
     raw_token = secrets.token_urlsafe(32)
     now = utc_now()

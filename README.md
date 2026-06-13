@@ -100,6 +100,7 @@ For Render, use `render.yaml` and set these environment variables in the Render 
 - `PANDASCORE_TOKEN`
 - `GRID_API_TOKEN` optional future CS2 stats provider token.
 - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` for browser and iPhone push notifications.
+- `NOTIFICATION_DISPATCH_TOKEN`, a random shared secret for background refresh and notification cron calls.
 - `APP_PUBLIC_URL`, for example `https://your-service.onrender.com`.
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` for Google login.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` for email verification.
@@ -161,6 +162,43 @@ mailto:you@example.com
 ```
 
 Do not commit `private_key.pem` or `public_key.pem`.
+
+Background refresh on free hosting:
+
+Render free can sleep when inactive, so MatchNest includes a tiny Cloudflare Worker cron template at:
+
+```text
+infra/cloudflare/matchnest-cron-worker.js
+```
+
+Create one random token, set the same value in both places:
+
+```text
+Render env:      NOTIFICATION_DISPATCH_TOKEN
+Cloudflare env:  NOTIFICATION_DISPATCH_TOKEN
+```
+
+Set this Cloudflare Worker env too:
+
+```text
+MATCHNEST_URL=https://your-render-service.onrender.com
+```
+
+Configure the Worker cron trigger:
+
+```text
+* * * * *
+```
+
+The Worker calls:
+
+```text
+/health
+/background/refresh
+/notifications/dispatch
+```
+
+That keeps the free Render service warm most of the time, refreshes followed calendars in the background, and dispatches due push notifications without waiting for the PWA screen to request data.
 
 ## Run tests
 

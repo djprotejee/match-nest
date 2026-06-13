@@ -4,7 +4,7 @@ import os
 import json
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
@@ -43,6 +43,7 @@ from .storage import (
     get_entity_record,
     get_or_create_oauth_user,
     list_entity_records,
+    list_user_ids,
     preferences_for_user,
     search_entity_records,
     set_user_f1_sessions,
@@ -74,14 +75,7 @@ def warm_default_calendar_cache() -> None:
     try:
         preferences = preferences_for_user(None)
         now = datetime.now(timezone.utc)
-        months_to_warm = [((now.month - 1 + offset) % 12) + 1 for offset in range(2)]
-        for index, month in enumerate(months_to_warm):
-            year = now.year + ((now.month - 1 + index) // 12)
-            start = datetime(year, month, 1, tzinfo=timezone.utc)
-            if month == 12:
-                end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-            else:
-                end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+        for start, end in warmup_ranges(now, month_count=2):
             provider_results(start, end, preferences)
             time.sleep(2)
     except Exception:
@@ -197,6 +191,19 @@ def require_user(current_user: UserAccount | None = Depends(optional_user)) -> U
     return current_user
 
 
+def require_user_or_dispatch_token(
+    authorization: str | None = Header(default=None),
+    x_notification_dispatch_token: str | None = Header(default=None),
+) -> UserAccount | None:
+    expected_token = os.getenv("NOTIFICATION_DISPATCH_TOKEN", "").strip()
+    if expected_token and x_notification_dispatch_token == expected_token:
+        return None
+    current_user = optional_user(authorization)
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return current_user
+
+
 def bearer_token(authorization: str | None) -> str | None:
     if not authorization:
         return None
@@ -213,6 +220,24 @@ def user_payload(user: UserAccount) -> dict:
         "email_verified": user.is_email_verified,
         "created_at": user.created_at.isoformat(),
     }
+
+
+def warmup_ranges(now: datetime, month_count: int = 7) -> list[tuple[datetime, datetime]]:
+    ranges: list[tuple[datetime, datetime]] = []
+    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    ranges.append((today_start, today_start + timedelta(days=1)))
+    ranges.append((today_start, today_start + timedelta(days=8)))
+    for offset in range(month_count):
+        month_index = now.month - 1 + offset
+        year = now.year + (month_index // 12)
+        month = (month_index % 12) + 1
+        start = datetime(year, month, 1, tzinfo=timezone.utc)
+        if month == 12:
+            end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+        ranges.append((start, end))
+    return ranges
 
 
 def build_verification_url(request: Request, token: str) -> str:
@@ -512,15 +537,34 @@ def remove_notification_rule(rule_id: str, current_user: UserAccount = Depends(r
 
 
 @app.post("/notifications/dispatch")
-def run_notifications(
-    current_user: UserAccount = Depends(require_user),
-    x_notification_dispatch_token: str | None = Header(default=None),
-) -> dict:
-    # Manual trigger is useful on free hosting where the service may sleep.
-    expected_token = os.getenv("NOTIFICATION_DISPATCH_TOKEN", "").strip()
-    if expected_token and x_notification_dispatch_token != expected_token:
-        raise HTTPException(status_code=403, detail="Invalid notification dispatch token.")
+def run_notifications(_actor: UserAccount | None = Depends(require_user_or_dispatch_token)) -> dict:
+    # Manual/cron trigger is useful on free hosting where the service may sleep.
     return dispatch_due_notifications()
+
+
+@app.post("/background/refresh")
+def background_refresh(_actor: UserAccount | None = Depends(require_user_or_dispatch_token)) -> dict:
+    now = datetime.now(timezone.utc)
+    warmed: list[str] = []
+    errors: list[str] = []
+    user_ids = [None]
+    # Warm all signed-in preference sets so every device for the same account
+    # reads persisted events/settings instead of starting a provider refresh.
+    try:
+        user_ids.extend(list_user_ids())
+    except Exception as exc:
+        errors.append(f"users: {exc}")
+
+    for user_id in user_ids:
+        preferences = preferences_for_user(user_id)
+        for start, end in warmup_ranges(now):
+            try:
+                provider_results(start, end, preferences)
+                warmed.append(f"{user_id or 'default'}:{start.date()}:{end.date()}")
+            except Exception as exc:
+                errors.append(f"{user_id or 'default'}:{start.date()}:{exc}")
+    notification_result = dispatch_due_notifications()
+    return {"ok": not errors, "warmed": warmed, "errors": errors, "notifications": notification_result}
 
 
 @app.post("/auth/register")
