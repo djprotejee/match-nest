@@ -87,7 +87,8 @@ function shouldShowEvent(
     state: AppState;
   },
 ): boolean {
-  if (!options.sports.has(event.sport) || !options.statuses.has(event.status)) {
+  const statusAllowed = options.statuses.has(event.status) || isTodayPastEvent(event);
+  if (!options.sports.has(event.sport) || !statusAllowed) {
     return false;
   }
   if (event.follow_level === "hidden") {
@@ -109,6 +110,13 @@ function shouldShowEvent(
     return false;
   }
   return true;
+}
+
+function isTodayPastEvent(event: MatchEvent): boolean {
+  if (event.status !== "past" || !event.starts_at) {
+    return false;
+  }
+  return localDateKey(new Date(event.starts_at)) === localDateKey(new Date());
 }
 
 function applyLocalFollow(event: MatchEvent, entityMap: Map<string, EntityItem>): MatchEvent {
