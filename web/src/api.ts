@@ -1,4 +1,4 @@
-import type { AccountSettings, AuthResponse, AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, FollowLevel, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport } from "./types";
+import type { AccountSettings, AuthResponse, AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, FollowLevel, MatchEvent, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport } from "./types";
 
 const DEFAULT_API_URL = import.meta.env.DEV ? `${window.location.origin}/api/` : `${window.location.origin}/`;
 const AUTH_TOKEN_KEY = "matchnest.auth.token";
@@ -104,6 +104,12 @@ export async function fetchEventDetails(eventId: string): Promise<EventDetails> 
   return getJson<EventDetails>(apiUrl(`events/${eventId}/details`));
 }
 
+export async function fetchEvent(eventId: string, revealSpoilers = false): Promise<MatchEvent> {
+  const url = apiUrl(`events/${eventId}`);
+  url.searchParams.set("reveal_spoilers", revealSpoilers ? "true" : "false");
+  return getJson<MatchEvent>(url);
+}
+
 export async function saveFollowLevel(entityId: string, level: FollowLevel): Promise<void> {
   const response = await fetch(apiUrl(`follows/${entityId}`), {
     method: "PUT",
@@ -153,7 +159,7 @@ export async function saveAccountSettings(input: {
   hide_spoilers?: boolean;
   ui_state?: Record<string, unknown>;
 }): Promise<void> {
-  await postJson("settings", input);
+  await postJson("settings", input, "PUT");
 }
 
 export async function logoutAccount(): Promise<void> {

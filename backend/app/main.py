@@ -41,6 +41,7 @@ from .storage import (
     delete_or_hide_entity_for_user,
     delete_session,
     get_entity_record,
+    get_event,
     get_or_create_oauth_user,
     list_entity_records,
     list_user_ids,
@@ -419,6 +420,19 @@ def event_details(event_id: str) -> dict:
     if details is None:
         raise HTTPException(status_code=404, detail="Event details are not available for this event.")
     return details
+
+
+@app.get("/events/{event_id}")
+def event_by_id(
+    event_id: str,
+    reveal_spoilers: bool = False,
+    current_user: UserAccount | None = Depends(optional_user),
+) -> dict:
+    preferences = preferences_for_user(current_user.id if current_user else None)
+    event = get_event(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found.")
+    return serialize_event(event, preferences, reveal_spoilers)
 
 
 @app.get("/timeline")

@@ -24,6 +24,7 @@ import {
   fetchCalendar,
   fetchCurrentUser,
   fetchEntities,
+  fetchEvent,
   fetchEventDetails,
   fetchGoogleLoginUrl,
   fetchNotificationSettings,
@@ -453,8 +454,16 @@ export function App() {
     updateState({ watch: { ...state.watch, [eventId]: value } });
   }
 
-  function toggleReveal(eventId: string) {
-    updateState({ revealed: { ...state.revealed, [eventId]: !state.revealed[eventId] } });
+  async function toggleReveal(eventId: string) {
+    try {
+      const revealedEvent = await fetchEvent(eventId, true);
+      setTimeline((current) => replaceEventInGroups(current, revealedEvent));
+      setCalendarGroups((current) => replaceEventInGroups(current, revealedEvent));
+      updateState({ revealed: { ...state.revealed, [eventId]: true } });
+      setLastError(null);
+    } catch (error) {
+      setLastError(readErrorMessage(error));
+    }
   }
 
   function addManualPin(event: MatchEvent) {
@@ -1868,7 +1877,7 @@ function EventCard(props: {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
-  const shouldHideResult = event.result_hidden && !props.revealed;
+  const shouldHideResult = event.result_hidden && !event.result_summary;
 
   async function toggleDetails() {
     if (detailsOpen) {
@@ -2075,6 +2084,13 @@ function filterGroupsByDateRange(groups: DayGroup[], start: string | null, end: 
   }
   const rangeEnd = end || start;
   return groups.filter((group) => group.date >= start && group.date <= rangeEnd);
+}
+
+function replaceEventInGroups(groups: DayGroup[], replacement: MatchEvent): DayGroup[] {
+  return groups.map((group) => ({
+    ...group,
+    events: group.events.map((event) => (event.id === replacement.id ? replacement : event)),
+  }));
 }
 
 function isDateSelected(date: string, start: string | null, end: string | null): boolean {
