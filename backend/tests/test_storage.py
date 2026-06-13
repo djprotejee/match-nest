@@ -13,6 +13,7 @@ from app.storage import (
     create_custom_entity,
     create_user,
     delete_stale_events_for_source,
+    event_details_cache_state,
     delete_or_hide_entity_for_user,
     get_cached_event_details,
     get_cached_provider_payload,
@@ -95,6 +96,9 @@ class StorageTests(unittest.TestCase):
                 upsert_event_details_cache("f1-2026-7-race", "fastf1", details)
 
                 self.assertEqual(get_cached_event_details("f1-2026-7-race"), details)
+                state = event_details_cache_state("f1-2026-7-race")
+                self.assertEqual(state.provider, "fastf1")
+                self.assertEqual(state.details, details)
 
     def test_provider_payload_cache_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

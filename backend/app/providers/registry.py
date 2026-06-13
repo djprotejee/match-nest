@@ -24,7 +24,7 @@ from ..models import EntityKind, Event, EventStatus, F1Session, FollowLevel, Spo
 from ..seed import DEFAULT_PREFERENCES, demo_events
 from ..storage import (
     delete_stale_events_for_source,
-    get_cached_event_details,
+    event_details_cache_state,
     get_event,
     list_entity_records,
     list_events,
@@ -228,7 +228,11 @@ def fetch_events(
 
 def fetch_event_details(event_id: str) -> dict | None:
     load_environment()
-    cached = get_cached_event_details(event_id)
+    event = get_event(event_id)
+    cached_state = event_details_cache_state(event_id)
+    cached = cached_state.details if cached_state else None
+    if cached_state and event_details_cache_is_fresh(cached_state.fetched_at, event):
+        return normalize_event_details(cached_state.details)
     try:
         details = None
         if event_id.startswith("f1-"):
@@ -236,9 +240,9 @@ def fetch_event_details(event_id: str) -> dict | None:
         elif event_id.startswith("f4-"):
             details = F4CalendarProvider().details(event_id)
         elif event_id.startswith("cs2-"):
-            details = PandaScoreCS2Provider().details(event_id, get_event(event_id))
+            details = PandaScoreCS2Provider().details(event_id, event)
         elif event_id.startswith("football-espn-"):
-            details = EspnFootballProvider().details(event_id, get_event(event_id))
+            details = EspnFootballProvider().details(event_id, event)
         elif event_id.startswith("football-apifootball-"):
             details = ApiFootballProvider().details(event_id)
         details = normalize_event_details(details)
@@ -259,6 +263,23 @@ def fetch_event_details(event_id: str) -> dict | None:
             "facts": [{"label": "Provider message", "value": detail_error_message(exc)}],
             "sections": [],
         })
+
+
+def event_details_cache_is_fresh(fetched_at: datetime, event: Event | None) -> bool:
+    ttl = event_details_cache_ttl(event)
+    return datetime.now(timezone.utc) - fetched_at < ttl
+
+
+def event_details_cache_ttl(event: Event | None) -> timedelta:
+    if event is None:
+        return timedelta(minutes=5)
+    if event.status == EventStatus.PAST:
+        return timedelta(days=14)
+    if event.status in {EventStatus.LIVE, EventStatus.DELAYED}:
+        return timedelta(seconds=45)
+    if event.status == EventStatus.TBD:
+        return timedelta(minutes=2)
+    return timedelta(minutes=10)
 
 
 def detail_error_summary(event_id: str, exc: Exception) -> str:

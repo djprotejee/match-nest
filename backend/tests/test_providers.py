@@ -14,6 +14,7 @@ from app.providers.registry import (
     followed_football_team_queries,
     provider_refresh_ttl,
     provider_should_refresh,
+    event_details_cache_ttl,
 )
 from app.providers.f4_calendar import F4CalendarProvider
 from app.providers.f1_jolpica import f1_constructor_standings_section, f1_driver_standings_section, parse_utc_datetime
@@ -182,6 +183,28 @@ class ProviderMappingTests(unittest.TestCase):
                 mark_provider_fetch("FootballDataProvider", "range", "error", "HTTP 429")
 
                 self.assertTrue(provider_should_refresh("FootballDataProvider", "range"))
+
+    def test_event_details_cache_ttl_is_longer_for_past_events(self) -> None:
+        past_event = Event(
+            id="cs2-1",
+            title="NAVI vs Spirit",
+            sport=Sport.CS2,
+            starts_at=datetime(2026, 6, 11, tzinfo=timezone.utc),
+            status=EventStatus.PAST,
+            entity_ids=["navi_cs2"],
+            source="pandascore",
+        )
+        live_event = Event(
+            id="cs2-2",
+            title="NAVI vs Spirit",
+            sport=Sport.CS2,
+            starts_at=datetime(2026, 6, 12, tzinfo=timezone.utc),
+            status=EventStatus.LIVE,
+            entity_ids=["navi_cs2"],
+            source="pandascore",
+        )
+
+        self.assertGreater(event_details_cache_ttl(past_event), event_details_cache_ttl(live_event))
 
     def test_espn_refreshes_current_window_more_often(self) -> None:
         now = datetime.now(timezone.utc)

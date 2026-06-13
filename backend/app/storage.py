@@ -49,6 +49,12 @@ class ProviderPayloadState(NamedTuple):
     fetched_at: datetime
 
 
+class EventDetailsCacheState(NamedTuple):
+    details: dict
+    provider: str
+    fetched_at: datetime
+
+
 class PostgresCursor:
     """Small cursor adapter that keeps the storage layer compatible with sqlite3."""
 
@@ -1269,16 +1275,28 @@ def get_event(event_id: str) -> Event | None:
 
 
 def get_cached_event_details(event_id: str) -> dict | None:
+    state = event_details_cache_state(event_id)
+    return state.details if state else None
+
+
+def event_details_cache_state(event_id: str) -> EventDetailsCacheState | None:
     connection = connect()
     try:
-        row = connection.execute("SELECT details_json FROM event_details_cache WHERE event_id = ?", (event_id,)).fetchone()
+        row = connection.execute(
+            "SELECT provider, details_json, fetched_at FROM event_details_cache WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
     finally:
         connection.close()
     if not row:
         return None
     try:
-        return json.loads(row["details_json"])
-    except json.JSONDecodeError:
+        return EventDetailsCacheState(
+            details=json.loads(row["details_json"]),
+            provider=str(row["provider"]),
+            fetched_at=datetime.fromisoformat(row["fetched_at"]).astimezone(timezone.utc),
+        )
+    except (json.JSONDecodeError, ValueError):
         return None
 
 
