@@ -6,11 +6,11 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
+      - key: DATABASE_URL
+        sync: false
       - key: TURSO_DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN
-        sync: false
-      - key: DATABASE_URL
         sync: false
       - key: MATCHNEST_ALLOW_DEMO_EVENTS
         value: "0"

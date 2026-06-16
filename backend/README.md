@@ -19,8 +19,8 @@ match-nest/.env.example
 Storage mode:
 
 - `DATABASE_URL` empty: local SQLite at `backend/.data/matchnest.sqlite`.
-- `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` set: Turso/libSQL, preferred for hosted free deployment.
-- `DATABASE_URL` set: Postgres fallback, for example Neon. Leave it empty when using Turso.
+- `DATABASE_URL` set: hosted Postgres, for example Neon. This takes priority over Turso.
+- `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` set: Turso/libSQL fallback.
 
 ## Run
 

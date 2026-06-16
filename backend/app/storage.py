@@ -254,17 +254,18 @@ def _persistent_libsql_connection(database_url: str, auth_token: str) -> LibsqlC
 
 
 def connect() -> DatabaseConnection:
-    turso_url = os.getenv(TURSO_DATABASE_URL_ENV, "").strip()
-    if turso_url:
-        connection = _persistent_libsql_connection(turso_url, os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip())
-        ensure_db_initialized(connection, f"turso:{turso_url}", use_postgres_lock=False)
-        return connection
-
-    database_url = os.getenv(DATABASE_URL_ENV, "").strip()
+    database_url = configured_env_value(DATABASE_URL_ENV)
     if database_url:
         connection = PostgresConnection(database_url)
         ensure_db_initialized(connection, f"postgres:{database_url}", use_postgres_lock=True)
         return connection
+
+    turso_url = configured_env_value(TURSO_DATABASE_URL_ENV)
+    if turso_url:
+        connection = _persistent_libsql_connection(turso_url, configured_env_value(TURSO_AUTH_TOKEN_ENV))
+        ensure_db_initialized(connection, f"turso:{turso_url}", use_postgres_lock=False)
+        return connection
+
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
@@ -274,28 +275,36 @@ def connect() -> DatabaseConnection:
 
 def active_database_backend() -> dict[str, Any]:
     """Return non-secret database configuration details for diagnostics."""
-    turso_url = os.getenv(TURSO_DATABASE_URL_ENV, "").strip()
+    database_url = configured_env_value(DATABASE_URL_ENV)
+    if database_url:
+        return {
+            "backend": "postgres",
+            "has_turso_url": bool(configured_env_value(TURSO_DATABASE_URL_ENV)),
+            "has_turso_token": bool(configured_env_value(TURSO_AUTH_TOKEN_ENV)),
+            "has_database_url": True,
+        }
+
+    turso_url = configured_env_value(TURSO_DATABASE_URL_ENV)
     if turso_url:
         return {
             "backend": "turso",
             "has_turso_url": True,
-            "has_turso_token": bool(os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip()),
-            "has_database_url": bool(os.getenv(DATABASE_URL_ENV, "").strip()),
-        }
-    database_url = os.getenv(DATABASE_URL_ENV, "").strip()
-    if database_url:
-        return {
-            "backend": "postgres",
-            "has_turso_url": False,
-            "has_turso_token": bool(os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip()),
-            "has_database_url": True,
+            "has_turso_token": bool(configured_env_value(TURSO_AUTH_TOKEN_ENV)),
+            "has_database_url": bool(configured_env_value(DATABASE_URL_ENV)),
         }
     return {
         "backend": "sqlite",
         "has_turso_url": False,
-        "has_turso_token": bool(os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip()),
+        "has_turso_token": bool(configured_env_value(TURSO_AUTH_TOKEN_ENV)),
         "has_database_url": False,
     }
+
+
+def configured_env_value(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if value.startswith("#"):
+        return ""
+    return value
 
 
 def ensure_db_initialized(

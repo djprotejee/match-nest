@@ -12,7 +12,9 @@ from unittest.mock import patch
 from app.models import EntityKind, Event, EventStatus, F1Session, Follow, FollowLevel, Sport
 from app.storage import (
     LibsqlConnection,
+    active_database_backend,
     authenticate_user,
+    configured_env_value,
     connect,
     create_session,
     create_custom_entity,
@@ -41,6 +43,7 @@ from app.storage import (
     user_for_session,
     verify_email,
 )
+from scripts.migrate_turso_to_postgres import build_upsert_sql
 
 
 class _FakeLibsqlCursor:
@@ -408,6 +411,43 @@ class StorageTests(unittest.TestCase):
 
         self.assertIs(first, second)
         self.assertEqual(mocked_connect.call_count, 1)
+
+    def test_database_url_takes_priority_over_turso_when_both_are_set(self) -> None:
+        fake_postgres = object()
+
+        with patch.dict(
+            os.environ,
+            {
+                "DATABASE_URL": "postgresql://neon.example/matchnest",
+                "TURSO_DATABASE_URL": "libsql://matchnest.turso.io",
+                "TURSO_AUTH_TOKEN": "token",
+            },
+        ):
+            with patch("app.storage.PostgresConnection", return_value=fake_postgres) as mocked_postgres:
+                with patch("app.storage.ensure_db_initialized") as mocked_init:
+                    connection = connect()
+                    backend = active_database_backend()
+
+        self.assertIs(connection, fake_postgres)
+        mocked_postgres.assert_called_once_with("postgresql://neon.example/matchnest")
+        mocked_init.assert_called_once()
+        self.assertEqual(backend["backend"], "postgres")
+        self.assertTrue(backend["has_turso_url"])
+
+    def test_configured_env_value_treats_hash_prefixed_values_as_disabled(self) -> None:
+        with patch.dict(os.environ, {"DATABASE_URL": "#postgresql://disabled.example/db"}):
+            self.assertEqual(configured_env_value("DATABASE_URL"), "")
+
+    def test_turso_to_postgres_migration_uses_table_conflict_keys(self) -> None:
+        sql = build_upsert_sql(
+            "user_follows",
+            ["user_id", "entity_id", "level", "updated_at"],
+            ["user_id", "entity_id"],
+        )
+
+        self.assertIn('ON CONFLICT ("user_id", "entity_id") DO UPDATE', sql)
+        self.assertIn('"level" = EXCLUDED."level"', sql)
+        self.assertIn('"updated_at" = EXCLUDED."updated_at"', sql)
 
 
 if __name__ == "__main__":

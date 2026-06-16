@@ -92,8 +92,8 @@ http://127.0.0.1:8000
 
 For Render, use `render.yaml` and set these environment variables in the Render dashboard:
 
-- `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, preferred hosted database for the free setup.
-- `DATABASE_URL`, optional legacy Postgres fallback. Leave empty when using Turso.
+- `DATABASE_URL`, hosted Postgres database, for example Neon. This takes priority when set.
+- `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, optional Turso/libSQL fallback. Leave empty when using Neon.
 - `FOOTBALL_DATA_TOKEN`
 - `API_FOOTBALL_TOKEN`
 - `API_FOOTBALL_ENABLE=1` if your API-Football plan supports the seasons you need.
@@ -114,14 +114,13 @@ Local development uses SQLite automatically when `TURSO_DATABASE_URL` and `DATAB
 backend/.data
 ```
 
-Production on Render free should set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to a Turso/libSQL database so accounts, follows, custom entities, manual pins and cached events persist across deploys.
+Production on Render should set `DATABASE_URL` to a hosted Postgres database, for example Neon, so accounts, follows, custom entities, manual pins and cached events persist across deploys.
 
 Render free setup:
 
 ```text
 Render web service: free
-TURSO_DATABASE_URL: Turso database URL
-TURSO_AUTH_TOKEN:   Turso auth token
+DATABASE_URL:        Neon/Postgres connection string
 Persistent disk:    not needed
 ```
 
@@ -136,6 +135,18 @@ $env:TURSO_AUTH_TOKEN='your-turso-token'
 ```
 
 After the migration succeeds, set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in Render, then clear `DATABASE_URL` so the app no longer connects to Neon.
+
+Turso to Neon/Postgres migration:
+
+```powershell
+$env:SOURCE_TURSO_DATABASE_URL='libsql://your-db.turso.io'
+$env:SOURCE_TURSO_AUTH_TOKEN='your-turso-token'
+$env:TARGET_DATABASE_URL='postgresql://new-neon-url'
+.\backend\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
+.\backend\.venv\Scripts\python.exe .\backend\scripts\migrate_turso_to_postgres.py
+```
+
+After the migration succeeds, set `DATABASE_URL` in Render to the target Neon/Postgres connection string. Clear `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` unless you intentionally want to keep them as inactive fallback values.
 
 Google OAuth setup:
 
