@@ -2247,7 +2247,7 @@ function EventDetailsPanel({
 
 function eventDetailsV2Sections(details: EventDetails, existingTitles: Set<string>): EventDetails["sections"] {
   const sections: EventDetails["sections"] = [];
-  if (details.score && !hasSectionTitle(existingTitles, "score")) {
+  if (details.score && !hasExactSectionTitle(existingTitles, details.score.title)) {
     sections.push(details.score);
   }
   appendRecordSection(sections, existingTitles, "Lineups", details.lineups);
@@ -2274,6 +2274,10 @@ function appendRecordSection(
     columns,
     rows: records.map((record) => columns.map((column) => String(record[column] ?? ""))),
   });
+}
+
+function hasExactSectionTitle(existingTitles: Set<string>, title: string): boolean {
+  return existingTitles.has(title.trim().toLowerCase());
 }
 
 function hasSectionTitle(existingTitles: Set<string>, title: string): boolean {
