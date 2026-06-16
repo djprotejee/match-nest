@@ -235,7 +235,7 @@ def fetch_event_details(event_id: str) -> dict | None:
     event = get_event(event_id)
     cached_state = event_details_cache_state(event_id)
     cached = cached_state.details if cached_state else None
-    if cached_state and event_details_cache_is_fresh(cached_state.fetched_at, event):
+    if cached_state and event_details_cache_is_fresh(cached_state.fetched_at, event) and event_details_cache_is_usable(event_id, cached_state.details):
         return normalize_event_details(cached_state.details)
     try:
         details = None
@@ -272,6 +272,24 @@ def fetch_event_details(event_id: str) -> dict | None:
 def event_details_cache_is_fresh(fetched_at: datetime, event: Event | None) -> bool:
     ttl = event_details_cache_ttl(event)
     return datetime.now(timezone.utc) - fetched_at < ttl
+
+
+def event_details_cache_is_usable(event_id: str, details: dict) -> bool:
+    if event_id.startswith("f1-") and event_id.endswith("-race"):
+        return f1_race_details_are_complete(details)
+    return True
+
+
+def f1_race_details_are_complete(details: dict) -> bool:
+    for section in details.get("sections") or []:
+        title = str(section.get("title") or "").strip().lower()
+        if title != "race classification":
+            continue
+        columns = {str(column).strip().lower() for column in section.get("columns") or []}
+        rows = section.get("rows") or []
+        required_columns = {"pos", "drv", "driver", "team", "laps", "time / status"}
+        return required_columns.issubset(columns) and len(rows) >= 10
+    return False
 
 
 def event_details_cache_ttl(event: Event | None) -> timedelta:

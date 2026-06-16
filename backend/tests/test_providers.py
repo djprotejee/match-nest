@@ -12,6 +12,7 @@ from app.providers.registry import (
     detail_error_summary,
     followed_football_competitions,
     followed_football_team_queries,
+    f1_race_details_are_complete,
     provider_refresh_ttl,
     provider_should_refresh,
     event_details_cache_ttl,
@@ -73,6 +74,29 @@ class ProviderMappingTests(unittest.TestCase):
         self.assertNotIn("403", summary)
         self.assertNotIn("Forbidden", summary)
         self.assertIn("not available yet", summary)
+
+    def test_f1_rejects_incomplete_cached_race_classification(self) -> None:
+        broken_details = {
+            "sections": [
+                {
+                    "title": "Race classification",
+                    "columns": ["Pos", "DRV"],
+                    "rows": [["1", "LEC"]],
+                }
+            ]
+        }
+        complete_details = {
+            "sections": [
+                {
+                    "title": "Race classification",
+                    "columns": ["Pos", "DRV", "No", "Driver", "Team", "Grid", "Laps", "Time / status", "Points"],
+                    "rows": [["1", "HAM", "44", "Lewis Hamilton", "Ferrari", "2", "66", "1:32:28.105", "25"] for _ in range(22)],
+                }
+            ]
+        }
+
+        self.assertFalse(f1_race_details_are_complete(broken_details))
+        self.assertTrue(f1_race_details_are_complete(complete_details))
 
     def test_f1_standings_sections_map_driver_and_constructor_tables(self) -> None:
         driver_payload = {
