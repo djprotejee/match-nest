@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 import unittest
 import os
@@ -12,6 +13,7 @@ from app.models import EntityKind, Event, EventStatus, F1Session, Follow, Follow
 from app.storage import (
     LibsqlConnection,
     authenticate_user,
+    connect,
     create_session,
     create_custom_entity,
     create_user,
@@ -389,6 +391,23 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(first_connection.execute_calls, 1)
         self.assertEqual(second_connection.execute_calls, 1)
         self.assertEqual(cursor.fetchall(), [{"value": "ok"}])
+
+    def test_connect_reuses_thread_local_libsql_connection(self) -> None:
+        fake_connection = _FakeLibsqlConnection()
+
+        with patch.dict(
+            os.environ,
+            {"DATABASE_URL": "", "TURSO_DATABASE_URL": "libsql://matchnest.turso.io", "TURSO_AUTH_TOKEN": "token"},
+        ):
+            with patch("app.storage.libsql.connect", return_value=fake_connection) as mocked_connect:
+                with patch("app.storage._INITIALIZED_DATABASES", set()):
+                    thread_local = patch("app.storage._LIBSQL_THREAD_LOCAL", threading.local())
+                    with thread_local:
+                        first = connect()
+                        second = connect()
+
+        self.assertIs(first, second)
+        self.assertEqual(mocked_connect.call_count, 1)
 
 
 if __name__ == "__main__":

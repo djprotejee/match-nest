@@ -40,6 +40,7 @@ DATABASE_PROVIDER = os.getenv(DATABASE_URL_ENV, "").strip()
 POSTGRES_INIT_LOCK_KEY = 730219901
 _INIT_LOCK = threading.Lock()
 _INITIALIZED_DATABASES: set[str] = set()
+_LIBSQL_THREAD_LOCAL = threading.local()
 INTEGRITY_ERRORS: tuple[type[BaseException], ...] = (sqlite3.IntegrityError,)
 if psycopg is not None:
     INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg.errors.UniqueViolation)
@@ -132,13 +133,14 @@ class LibsqlCursor:
 class LibsqlConnection:
     """Direct Turso/libSQL connection using the official Python libsql package."""
 
-    def __init__(self, database_url: str, auth_token: str) -> None:
+    def __init__(self, database_url: str, auth_token: str, persistent: bool = False) -> None:
         if libsql is None:
             raise RuntimeError("TURSO_DATABASE_URL is set, but libsql is not installed.")
         if not auth_token:
             raise RuntimeError("TURSO_DATABASE_URL is set, but TURSO_AUTH_TOKEN is empty.")
         self.database_url = database_url
         self.auth_token = auth_token
+        self.persistent = persistent
         self.connection = self._open_connection()
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> LibsqlCursor:
@@ -162,6 +164,8 @@ class LibsqlConnection:
             self.connection.commit()
 
     def close(self) -> None:
+        if self.persistent:
+            return
         self.connection.close()
 
     def _open_connection(self) -> Any:
@@ -183,10 +187,28 @@ class LibsqlConnection:
 DatabaseConnection = sqlite3.Connection | PostgresConnection | LibsqlConnection
 
 
+def _persistent_libsql_connection(database_url: str, auth_token: str) -> LibsqlConnection:
+    cached = getattr(_LIBSQL_THREAD_LOCAL, "connection", None)
+    if (
+        isinstance(cached, LibsqlConnection)
+        and cached.database_url == database_url
+        and cached.auth_token == auth_token
+    ):
+        return cached
+    if isinstance(cached, LibsqlConnection):
+        try:
+            cached.connection.close()
+        except Exception:
+            pass
+    connection = LibsqlConnection(database_url, auth_token, persistent=True)
+    _LIBSQL_THREAD_LOCAL.connection = connection
+    return connection
+
+
 def connect() -> DatabaseConnection:
     turso_url = os.getenv(TURSO_DATABASE_URL_ENV, "").strip()
     if turso_url:
-        connection = LibsqlConnection(turso_url, os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip())
+        connection = _persistent_libsql_connection(turso_url, os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip())
         ensure_db_initialized(connection, f"turso:{turso_url}", use_postgres_lock=False)
         return connection
 
