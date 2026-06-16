@@ -44,6 +44,8 @@ POSTGRES_INIT_LOCK_KEY = 730219901
 _INIT_LOCK = threading.Lock()
 _INITIALIZED_DATABASES: set[str] = set()
 _LIBSQL_THREAD_LOCAL = threading.local()
+_ENTITY_RECORDS_CACHE_LOCK = threading.Lock()
+_ENTITY_RECORDS_CACHE: tuple[datetime, dict[str, EntityRecord]] | None = None
 INTEGRITY_ERRORS: tuple[type[BaseException], ...] = (sqlite3.IntegrityError,)
 if psycopg is not None:
     INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg.errors.UniqueViolation)
@@ -221,6 +223,16 @@ def log_slow_libsql_operation(phase: str, sql_summary: str, started: float) -> N
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
     if duration_ms >= slow_libsql_threshold_ms():
         LOGGER.warning("Slow Turso DB operation - phase=%s duration_ms=%s sql=%s", phase, duration_ms, sql_summary)
+
+
+def invalidate_entity_records_cache() -> None:
+    global _ENTITY_RECORDS_CACHE
+    with _ENTITY_RECORDS_CACHE_LOCK:
+        _ENTITY_RECORDS_CACHE = None
+
+
+def entity_records_cache_ttl() -> timedelta:
+    return timedelta(minutes=10)
 
 
 def _persistent_libsql_connection(database_url: str, auth_token: str) -> LibsqlConnection:
@@ -1105,6 +1117,14 @@ def mark_notification_sent(user_id: int, event_id: str, rule_id: str, scheduled_
 
 
 def list_entity_records() -> dict[str, EntityRecord]:
+    global _ENTITY_RECORDS_CACHE
+    now = utc_now()
+    with _ENTITY_RECORDS_CACHE_LOCK:
+        if _ENTITY_RECORDS_CACHE is not None:
+            cached_at, records = _ENTITY_RECORDS_CACHE
+            if now - cached_at < entity_records_cache_ttl():
+                return dict(records)
+
     connection = connect()
     try:
         rows = connection.execute("SELECT * FROM entities ORDER BY sport, kind, name").fetchall()
@@ -1128,7 +1148,7 @@ def list_entity_records() -> dict[str, EntityRecord]:
                 metadata=json.loads(row["metadata_json"] or "{}"),
             )
         )
-    return {
+    records = {
         row["id"]: EntityRecord(
             entity=Entity(row["id"], row["name"], Sport(row["sport"]), EntityKind(row["kind"]), row["color"]),
             aliases=aliases.get(row["id"], []),
@@ -1138,6 +1158,9 @@ def list_entity_records() -> dict[str, EntityRecord]:
         )
         for row in rows
     }
+    with _ENTITY_RECORDS_CACHE_LOCK:
+        _ENTITY_RECORDS_CACHE = (now, records)
+    return dict(records)
 
 
 def get_entity_record(entity_id: str) -> EntityRecord | None:
@@ -1177,6 +1200,7 @@ def create_custom_entity(
         connection.commit()
     finally:
         connection.close()
+    invalidate_entity_records_cache()
     set_user_follow(user_id, Follow(entity_id, level))
     record = get_entity_record(entity_id)
     if record is None:
@@ -1216,6 +1240,7 @@ def update_custom_entity(
         connection.commit()
     finally:
         connection.close()
+    invalidate_entity_records_cache()
     record = get_entity_record(entity_id)
     if record is None:
         raise RuntimeError("Updated entity could not be loaded.")
@@ -1248,6 +1273,7 @@ def delete_or_hide_entity_for_user(user_id: int, entity_id: str) -> str:
         connection.execute("DELETE FROM entity_provider_bindings WHERE entity_id = ?", (entity_id,))
         connection.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
         connection.commit()
+        invalidate_entity_records_cache()
         return "deleted"
     finally:
         connection.close()

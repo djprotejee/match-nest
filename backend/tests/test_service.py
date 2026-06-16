@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import unittest
+import os
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from app.models import Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserPreferences
 from app.seed import DEFAULT_PREFERENCES, demo_events
 from app.service import effective_event_status, filter_events, month_range, serialize_event, visible_follow_level
-from app.main import run_background_refresh_job, spoiler_safe_event_details, tournament_snapshot_sections, tournament_summary
+from app.main import (
+    run_background_refresh_job,
+    spoiler_safe_event_details,
+    start_background_refresh_job,
+    tournament_snapshot_sections,
+    tournament_summary,
+)
 
 
 class ServiceTests(unittest.TestCase):
@@ -196,6 +203,15 @@ class ServiceTests(unittest.TestCase):
                     run_background_refresh_job(full=False)
 
         self.assertEqual(recorded_user_ids, [None])
+
+    def test_hosted_turso_tick_is_skipped_by_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("app.main.active_database_backend", return_value={"backend": "turso"}):
+                result = start_background_refresh_job(full=False)
+
+        self.assertFalse(result["accepted"])
+        self.assertFalse(result["running"])
+        self.assertIn("skipped", result)
 
     def test_practice_can_be_enabled(self) -> None:
         DEFAULT_PREFERENCES.f1_sessions.add(F1Session.PRACTICE)

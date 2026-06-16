@@ -347,6 +347,8 @@ def run_background_refresh_job(full: bool = False) -> None:
 
 def start_background_refresh_job(full: bool = False) -> dict:
     global _BACKGROUND_REFRESH_RUNNING
+    if not full and not hosted_background_refresh_enabled():
+        return {"accepted": False, "running": False, "skipped": "Hosted Turso refresh is disabled."}
     with _BACKGROUND_REFRESH_LOCK:
         if _BACKGROUND_REFRESH_RUNNING:
             return {"accepted": False, "running": True, "last_result": _BACKGROUND_REFRESH_LAST_RESULT}
@@ -354,6 +356,12 @@ def start_background_refresh_job(full: bool = False) -> dict:
     thread = threading.Thread(target=run_background_refresh_job, kwargs={"full": full}, daemon=True)
     thread.start()
     return {"accepted": True, "running": True, "mode": "full" if full else "tick", "last_result": _BACKGROUND_REFRESH_LAST_RESULT}
+
+
+def hosted_background_refresh_enabled() -> bool:
+    if os.getenv("MATCHNEST_ENABLE_HOSTED_REFRESH", "").strip() == "1":
+        return True
+    return active_database_backend().get("backend") != "turso"
 
 
 def run_notification_dispatch_job() -> None:
