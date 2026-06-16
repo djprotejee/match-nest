@@ -49,7 +49,11 @@ class ProviderResult:
 _CACHE_TTL = timedelta(minutes=1)
 PROVIDER_CACHE_SCHEMA_VERSION = "v3"
 _CACHE: dict[str, tuple[datetime, list[ProviderResult], list[Event]]] = {}
-_PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=6)
+try:
+    _PROVIDER_MAX_WORKERS = max(1, int(os.getenv("MATCHNEST_PROVIDER_MAX_WORKERS", "2").strip() or "2"))
+except ValueError:
+    _PROVIDER_MAX_WORKERS = 2
+_PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=_PROVIDER_MAX_WORKERS)
 _IN_FLIGHT_LOCK = threading.Lock()
 _IN_FLIGHT_REFRESHES: dict[str, Future] = {}
 

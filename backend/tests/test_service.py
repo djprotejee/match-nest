@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from app.models import Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserPreferences
 from app.seed import DEFAULT_PREFERENCES, demo_events
 from app.service import effective_event_status, filter_events, month_range, serialize_event, visible_follow_level
-from app.main import spoiler_safe_event_details, tournament_snapshot_sections, tournament_summary
+from app.main import run_background_refresh_job, spoiler_safe_event_details, tournament_snapshot_sections, tournament_summary
 
 
 class ServiceTests(unittest.TestCase):
@@ -181,6 +182,20 @@ class ServiceTests(unittest.TestCase):
         start, end = month_range(2026, 7)
         filtered = filter_events(self.events, DEFAULT_PREFERENCES, start=start, end=end)
         self.assertEqual([event.id for event in filtered], ["major-next-month-demo"])
+
+    def test_minute_background_refresh_only_uses_default_preferences(self) -> None:
+        recorded_user_ids: list[int | None] = []
+
+        def fake_preferences_for_user(user_id: int | None):
+            recorded_user_ids.append(user_id)
+            return DEFAULT_PREFERENCES
+
+        with patch("app.main.list_user_ids", side_effect=AssertionError("tick should not enumerate users")):
+            with patch("app.main.preferences_for_user", side_effect=fake_preferences_for_user):
+                with patch("app.main.provider_results", return_value=([], [])):
+                    run_background_refresh_job(full=False)
+
+        self.assertEqual(recorded_user_ids, [None])
 
     def test_practice_can_be_enabled(self) -> None:
         DEFAULT_PREFERENCES.f1_sessions.add(F1Session.PRACTICE)

@@ -316,10 +316,11 @@ def run_background_refresh_job(full: bool = False) -> None:
     warmed: list[str] = []
     errors: list[str] = []
     user_ids = [None]
-    try:
-        user_ids.extend(list_user_ids())
-    except Exception as exc:
-        errors.append(f"users: {exc}")
+    if full:
+        try:
+            user_ids.extend(list_user_ids())
+        except Exception as exc:
+            errors.append(f"users: {exc}")
 
     ranges = warmup_ranges(now) if full else hot_refresh_ranges(now)
     mode = "full" if full else "tick"
