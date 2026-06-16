@@ -92,7 +92,8 @@ http://127.0.0.1:8000
 
 For Render, use `render.yaml` and set these environment variables in the Render dashboard:
 
-- `DATABASE_URL`, required on Render free. Use a hosted Postgres connection string.
+- `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, preferred hosted database for the free setup.
+- `DATABASE_URL`, optional legacy Postgres fallback. Leave empty when using Turso.
 - `FOOTBALL_DATA_TOKEN`
 - `API_FOOTBALL_TOKEN`
 - `API_FOOTBALL_ENABLE=1` if your API-Football plan supports the seasons you need.
@@ -107,19 +108,20 @@ For Render, use `render.yaml` and set these environment variables in the Render 
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` for email verification.
 - `MATCHNEST_ALLOW_DEMO_EVENTS=0`
 
-Local development uses SQLite automatically when `DATABASE_URL` is empty:
+Local development uses SQLite automatically when `TURSO_DATABASE_URL` and `DATABASE_URL` are empty:
 
 ```text
 backend/.data
 ```
 
-Production on Render free should set `DATABASE_URL` to a hosted Postgres database, for example Neon free Postgres, so accounts, follows, custom entities, manual pins and cached events persist across deploys.
+Production on Render free should set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to a Turso/libSQL database so accounts, follows, custom entities, manual pins and cached events persist across deploys.
 
 Render free setup:
 
 ```text
 Render web service: free
-DATABASE_URL:       hosted Postgres connection string
+TURSO_DATABASE_URL: Turso database URL
+TURSO_AUTH_TOKEN:   Turso auth token
 Persistent disk:    not needed
 ```
 
@@ -195,11 +197,11 @@ The Worker calls:
 
 ```text
 /health
-/background/refresh
+/background/tick
 /notifications/dispatch
 ```
 
-That keeps the free Render service warm most of the time, refreshes followed calendars in the background, and dispatches due push notifications without waiting for the PWA screen to request data.
+That keeps the free Render service warm most of the time, runs a lightweight live/recent refresh tick, and dispatches due push notifications without waiting for the PWA screen to request data. Use `/background/refresh?full=true` only for manual maintenance because it warms wider calendar ranges.
 
 ## Run tests
 

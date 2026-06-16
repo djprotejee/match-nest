@@ -23,19 +23,28 @@ except ImportError:  # pragma: no cover - SQLite remains the local default.
     psycopg = None
     dict_row = None
 
+try:
+    import libsql
+except ImportError:  # pragma: no cover - Turso is optional.
+    libsql = None
+
 
 DB_PATH = Path(__file__).resolve().parents[1] / ".data" / "matchnest.sqlite"
 PASSWORD_ITERATIONS = 210_000
 SESSION_DAYS = 30
 VERIFICATION_HOURS = 24
 DATABASE_URL_ENV = "DATABASE_URL"
+TURSO_DATABASE_URL_ENV = "TURSO_DATABASE_URL"
+TURSO_AUTH_TOKEN_ENV = "TURSO_AUTH_TOKEN"
 DATABASE_PROVIDER = os.getenv(DATABASE_URL_ENV, "").strip()
 POSTGRES_INIT_LOCK_KEY = 730219901
 _INIT_LOCK = threading.Lock()
 _INITIALIZED_DATABASES: set[str] = set()
-INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
+INTEGRITY_ERRORS: tuple[type[BaseException], ...] = (sqlite3.IntegrityError,)
 if psycopg is not None:
     INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg.errors.UniqueViolation)
+if libsql is not None and hasattr(libsql, "IntegrityError"):
+    INTEGRITY_ERRORS = (*INTEGRITY_ERRORS, libsql.IntegrityError)
 
 
 class ProviderFetchState(NamedTuple):
@@ -93,7 +102,64 @@ class PostgresConnection:
         self.connection.close()
 
 
-def connect() -> sqlite3.Connection | PostgresConnection:
+class LibsqlCursor:
+    """Cursor adapter for Turso/libSQL's sqlite-like API."""
+
+    def __init__(self, cursor: Any, lastrowid: int | None = None) -> None:
+        self.cursor = cursor
+        self.lastrowid = lastrowid
+        description = getattr(cursor, "description", None) or []
+        self.columns = [column[0] for column in description]
+
+    def fetchone(self) -> dict[str, Any] | sqlite3.Row | None:
+        return self._row_to_mapping(self.cursor.fetchone())
+
+    def fetchall(self) -> list[dict[str, Any] | sqlite3.Row]:
+        return [self._row_to_mapping(row) for row in self.cursor.fetchall()]
+
+    def _row_to_mapping(self, row: Any) -> dict[str, Any] | sqlite3.Row | None:
+        if row is None:
+            return None
+        if isinstance(row, (dict, sqlite3.Row)):
+            return row
+        if hasattr(row, "keys"):
+            return {key: row[key] for key in row.keys()}
+        if self.columns:
+            return {column: row[index] for index, column in enumerate(self.columns)}
+        return row
+
+
+class LibsqlConnection:
+    """Direct Turso/libSQL connection using the official Python libsql package."""
+
+    def __init__(self, database_url: str, auth_token: str) -> None:
+        if libsql is None:
+            raise RuntimeError("TURSO_DATABASE_URL is set, but libsql is not installed.")
+        if not auth_token:
+            raise RuntimeError("TURSO_DATABASE_URL is set, but TURSO_AUTH_TOKEN is empty.")
+        self.connection = libsql.connect(database=database_url, auth_token=auth_token)
+
+    def execute(self, sql: str, params: Iterable[Any] = ()) -> LibsqlCursor:
+        cursor = self.connection.execute(sql, tuple(params))
+        return LibsqlCursor(cursor, getattr(cursor, "lastrowid", None))
+
+    def commit(self) -> None:
+        self.connection.commit()
+
+    def close(self) -> None:
+        self.connection.close()
+
+
+DatabaseConnection = sqlite3.Connection | PostgresConnection | LibsqlConnection
+
+
+def connect() -> DatabaseConnection:
+    turso_url = os.getenv(TURSO_DATABASE_URL_ENV, "").strip()
+    if turso_url:
+        connection = LibsqlConnection(turso_url, os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip())
+        ensure_db_initialized(connection, f"turso:{turso_url}", use_postgres_lock=False)
+        return connection
+
     database_url = os.getenv(DATABASE_URL_ENV, "").strip()
     if database_url:
         connection = PostgresConnection(database_url)
@@ -107,7 +173,7 @@ def connect() -> sqlite3.Connection | PostgresConnection:
 
 
 def ensure_db_initialized(
-    connection: sqlite3.Connection | PostgresConnection,
+    connection: DatabaseConnection,
     database_key: str,
     use_postgres_lock: bool,
 ) -> None:
@@ -145,7 +211,7 @@ def translate_sql_for_postgres(sql: str) -> tuple[str, bool]:
     return translated, wants_lastrowid
 
 
-def init_db(connection: sqlite3.Connection | PostgresConnection) -> None:
+def init_db(connection: DatabaseConnection) -> None:
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS events (

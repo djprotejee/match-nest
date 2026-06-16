@@ -6,3 +6,4 @@ python-dotenv==1.2.2
 fastf1==3.6.1
 psycopg[binary]==3.2.13
 pywebpush==2.0.3
+libsql==0.1.11
