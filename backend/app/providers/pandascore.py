@@ -270,20 +270,69 @@ def cs2_games_section(item: dict) -> dict | None:
     games = item.get("games") or []
     if not games:
         return None
-    team_tags = [
-        str(opponent.get("opponent", {}).get("acronym") or short_team_tag(str(opponent.get("opponent", {}).get("name") or "")))
-        for opponent in item.get("opponents", [])
-    ]
+    opponents = [opponent.get("opponent", {}) for opponent in item.get("opponents", [])]
+    team_tags = {opponent.get("id"): str(opponent.get("acronym") or short_team_tag(str(opponent.get("name") or ""))) for opponent in opponents}
+    matchup = " vs ".join([tag for tag in team_tags.values() if tag]) or "-"
     rows = []
     for game in sorted(games, key=lambda value: value.get("position") or 0):
         rows.append(
             [
                 str(game.get("position") or "-"),
-                " vs ".join([tag for tag in team_tags if tag]) or "-",
+                cs2_game_map_name(game),
+                matchup,
+                cs2_game_score(game, team_tags),
+                cs2_game_winner(game, team_tags),
+                cs2_game_status(game),
                 format_seconds(game.get("length")),
             ]
         )
-    return {"title": "Maps", "columns": ["Map", "Teams", "Length"], "rows": rows}
+    return {"title": "Maps", "columns": ["Map", "Name", "Teams", "Score", "Winner", "Status", "Length"], "rows": rows}
+
+
+def cs2_game_map_name(game: dict) -> str:
+    for key in ["map", "map_name", "name"]:
+        value = game.get(key)
+        if isinstance(value, dict):
+            name = value.get("name") or value.get("display_name")
+            if name:
+                return str(name)
+        if value:
+            return str(value)
+    return "-"
+
+
+def cs2_game_score(game: dict, team_tags: dict[object, str]) -> str:
+    results = game.get("results") or []
+    if isinstance(results, list) and results:
+        pieces = []
+        for result in results:
+            team_id = result.get("team_id") or result.get("team", {}).get("id")
+            score = result.get("score")
+            tag = team_tags.get(team_id) or str(team_id or "-")
+            if score is not None:
+                pieces.append(f"{tag} {score}")
+        if pieces:
+            return " - ".join(pieces)
+    for key in ["score", "scores", "rounds_score"]:
+        value = game.get(key)
+        if value:
+            return str(value)
+    return "-"
+
+
+def cs2_game_winner(game: dict, team_tags: dict[object, str]) -> str:
+    winner = game.get("winner") or game.get("winner_team")
+    if isinstance(winner, dict):
+        winner_id = winner.get("id")
+        return team_tags.get(winner_id) or str(winner.get("acronym") or winner.get("name") or "-")
+    winner_id = game.get("winner_id") or game.get("winner_team_id")
+    if winner_id is not None:
+        return team_tags.get(winner_id) or str(winner_id)
+    return "-"
+
+
+def cs2_game_status(game: dict) -> str:
+    return str(game.get("status") or game.get("finished") or "-")
 
 
 def cs2_stats_availability_section(item: dict) -> dict | None:
