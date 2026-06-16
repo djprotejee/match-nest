@@ -148,6 +148,17 @@ $env:TARGET_DATABASE_URL='postgresql://new-neon-url'
 
 After the migration succeeds, set `DATABASE_URL` in Render to the target Neon/Postgres connection string. Clear `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` unless you intentionally want to keep them as inactive fallback values.
 
+Temporary Neon to main Neon migration:
+
+```powershell
+$env:SOURCE_DATABASE_URL='postgresql://temporary-neon-url'
+$env:TARGET_DATABASE_URL='postgresql://main-neon-url'
+.\backend\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
+.\backend\.venv\Scripts\python.exe .\backend\scripts\migrate_postgres_to_postgres.py
+```
+
+After the migration succeeds, switch Render `DATABASE_URL` back to the main Neon connection string.
+
 Google OAuth setup:
 
 ```text
