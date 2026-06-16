@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -56,6 +56,7 @@ from .storage import (
     set_user_ui_state,
     upsert_notification_rule,
     upsert_push_subscription,
+    active_database_backend,
     delete_notification_rule,
     update_custom_entity,
     user_for_session,
@@ -67,12 +68,14 @@ app = FastAPI(title="MatchNest API", version="0.1.0")
 
 @app.on_event("startup")
 def warm_default_calendar_cache_on_startup() -> None:
-    # Render free instances can sleep. Warm the main calendar in the background
-    # so the first user navigation does not have to trigger every provider.
-    thread = threading.Thread(target=warm_default_calendar_cache, daemon=True)
-    thread.start()
-    notification_thread = threading.Thread(target=notification_dispatch_loop, daemon=True)
-    notification_thread.start()
+    if os.getenv("MATCHNEST_STARTUP_WARMUP", "").strip() == "1":
+        # Optional local warmup so development can pre-fill cache without
+        # making hosted instances do heavy provider work during boot.
+        thread = threading.Thread(target=warm_default_calendar_cache, daemon=True)
+        thread.start()
+    if os.getenv("MATCHNEST_INTERNAL_NOTIFICATION_LOOP", "").strip() == "1":
+        notification_thread = threading.Thread(target=notification_dispatch_loop, daemon=True)
+        notification_thread.start()
 
 
 def warm_default_calendar_cache() -> None:
@@ -317,6 +320,11 @@ def build_verification_url(request: Request, token: str) -> str:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "timezone": "Europe/Kyiv"}
+
+
+@app.get("/health/database")
+def database_health() -> dict:
+    return active_database_backend()
 
 
 @app.get("/sources")
@@ -958,12 +966,18 @@ if WEB_DIST.exists():
     app.mount("/icons", StaticFiles(directory=WEB_DIST / "icons"), name="icons")
 
 
-@app.get("/{full_path:path}", include_in_schema=False)
-def serve_pwa(full_path: str) -> FileResponse:
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False, response_model=None)
+def serve_pwa(full_path: str, request: Request):
     requested = WEB_DIST / full_path
+    target: Path | None = None
     if WEB_DIST.exists() and requested.is_file():
-        return FileResponse(requested)
-    index = WEB_DIST / "index.html"
-    if index.exists():
-        return FileResponse(index)
+        target = requested
+    else:
+        index = WEB_DIST / "index.html"
+        if index.exists():
+            target = index
+    if target is not None:
+        if request.method == "HEAD":
+            return Response(status_code=200)
+        return FileResponse(target)
     raise HTTPException(status_code=404, detail="Web app is not built. Run npm run build in web/.")

@@ -172,6 +172,32 @@ def connect() -> DatabaseConnection:
     return connection
 
 
+def active_database_backend() -> dict[str, Any]:
+    """Return non-secret database configuration details for diagnostics."""
+    turso_url = os.getenv(TURSO_DATABASE_URL_ENV, "").strip()
+    if turso_url:
+        return {
+            "backend": "turso",
+            "has_turso_url": True,
+            "has_turso_token": bool(os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip()),
+            "has_database_url": bool(os.getenv(DATABASE_URL_ENV, "").strip()),
+        }
+    database_url = os.getenv(DATABASE_URL_ENV, "").strip()
+    if database_url:
+        return {
+            "backend": "postgres",
+            "has_turso_url": False,
+            "has_turso_token": bool(os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip()),
+            "has_database_url": True,
+        }
+    return {
+        "backend": "sqlite",
+        "has_turso_url": False,
+        "has_turso_token": bool(os.getenv(TURSO_AUTH_TOKEN_ENV, "").strip()),
+        "has_database_url": False,
+    }
+
+
 def ensure_db_initialized(
     connection: DatabaseConnection,
     database_key: str,
