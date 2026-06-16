@@ -1,4 +1,4 @@
-const CACHE_NAME = "match-nest-v1";
+const CACHE_NAME = "match-nest-v2";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icons/icon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -20,6 +20,28 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  const url = new URL(event.request.url);
+  const sameOrigin = url.origin === self.location.origin;
+  const isApiLikePath =
+    sameOrigin &&
+    (url.pathname.startsWith("/health") ||
+      url.pathname.startsWith("/auth/") ||
+      url.pathname.startsWith("/events") ||
+      url.pathname.startsWith("/entities") ||
+      url.pathname.startsWith("/timeline") ||
+      url.pathname.startsWith("/calendar") ||
+      url.pathname.startsWith("/notifications") ||
+      url.pathname.startsWith("/settings") ||
+      url.pathname.startsWith("/sources") ||
+      url.pathname.startsWith("/tournaments") ||
+      url.pathname.startsWith("/background") ||
+      url.pathname.startsWith("/follows"));
+
+  if (isApiLikePath) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
   event.respondWith(
     fetch(event.request)
       .then((response) => {
@@ -27,7 +49,17 @@ self.addEventListener("fetch", (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       })
-      .catch(() => caches.match(event.request).then((cached) => cached || caches.match("/"))),
+      .catch(() =>
+        caches.match(event.request).then((cached) => {
+          if (cached) {
+            return cached;
+          }
+          if (event.request.mode === "navigate") {
+            return caches.match("/");
+          }
+          throw new Error("Network error");
+        }),
+      ),
   );
 });
 
