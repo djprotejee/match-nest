@@ -53,7 +53,10 @@ def main() -> None:
     if not turso_url or not turso_token:
         raise SystemExit("Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN for the target Turso database.")
 
-    source = psycopg.connect(source_url, row_factory=dict_row)
+    # Neon can terminate long idle transactions while the script writes a large
+    # table to Turso. Autocommit keeps each SELECT outside a lingering
+    # transaction, making the migration safe to resume table by table.
+    source = psycopg.connect(source_url, row_factory=dict_row, autocommit=True)
     target = LibsqlConnection(turso_url, turso_token)
 
     try:
