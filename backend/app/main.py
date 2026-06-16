@@ -247,7 +247,20 @@ def warmup_ranges(now: datetime, month_count: int = 7) -> list[tuple[datetime, d
     return ranges
 
 
-def run_background_refresh_job() -> None:
+def hot_refresh_ranges(now: datetime) -> list[tuple[datetime, datetime]]:
+    """Small windows for minute cron ticks.
+
+    The full calendar warmup is intentionally not used by the cron endpoint:
+    it reads too much from hosted databases. These windows keep live/recent
+    events current while provider TTLs decide which upstream APIs are due.
+    """
+    return [
+        (now - timedelta(hours=6), now + timedelta(hours=18)),
+        (now, now + timedelta(days=8)),
+    ]
+
+
+def run_background_refresh_job(full: bool = False) -> None:
     global _BACKGROUND_REFRESH_LAST_RESULT, _BACKGROUND_REFRESH_RUNNING
     now = datetime.now(timezone.utc)
     warmed: list[str] = []
@@ -258,10 +271,12 @@ def run_background_refresh_job() -> None:
     except Exception as exc:
         errors.append(f"users: {exc}")
 
+    ranges = warmup_ranges(now) if full else hot_refresh_ranges(now)
+    mode = "full" if full else "tick"
     try:
         for user_id in user_ids:
             preferences = preferences_for_user(user_id)
-            for start, end in warmup_ranges(now):
+            for start, end in ranges:
                 try:
                     provider_results(start, end, preferences)
                     warmed.append(f"{user_id or 'default'}:{start.date()}:{end.date()}")
@@ -270,6 +285,7 @@ def run_background_refresh_job() -> None:
         notification_result = dispatch_due_notifications()
         _BACKGROUND_REFRESH_LAST_RESULT = {
             "ok": not errors,
+            "mode": mode,
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "warmed": warmed,
             "errors": errors,
@@ -280,15 +296,15 @@ def run_background_refresh_job() -> None:
             _BACKGROUND_REFRESH_RUNNING = False
 
 
-def start_background_refresh_job() -> dict:
+def start_background_refresh_job(full: bool = False) -> dict:
     global _BACKGROUND_REFRESH_RUNNING
     with _BACKGROUND_REFRESH_LOCK:
         if _BACKGROUND_REFRESH_RUNNING:
             return {"accepted": False, "running": True, "last_result": _BACKGROUND_REFRESH_LAST_RESULT}
         _BACKGROUND_REFRESH_RUNNING = True
-    thread = threading.Thread(target=run_background_refresh_job, daemon=True)
+    thread = threading.Thread(target=run_background_refresh_job, kwargs={"full": full}, daemon=True)
     thread.start()
-    return {"accepted": True, "running": True, "last_result": _BACKGROUND_REFRESH_LAST_RESULT}
+    return {"accepted": True, "running": True, "mode": "full" if full else "tick", "last_result": _BACKGROUND_REFRESH_LAST_RESULT}
 
 
 def build_verification_url(request: Request, token: str) -> str:
@@ -790,10 +806,18 @@ def run_notifications(_actor: UserAccount | None = Depends(require_user_or_dispa
 
 
 @app.post("/background/refresh")
-def background_refresh(_actor: UserAccount | None = Depends(require_user_or_dispatch_token)) -> dict:
-    # Cloudflare should only kick the refresh and get a fast response. Provider
-    # refreshes continue inside the Render process after the HTTP request ends.
-    return {"ok": True, **start_background_refresh_job()}
+def background_refresh(
+    full: bool = False,
+    _actor: UserAccount | None = Depends(require_user_or_dispatch_token),
+) -> dict:
+    # Minute cron should call the default lightweight tick. Add ?full=true only
+    # for manual maintenance, because full calendar warmups are database-heavy.
+    return {"ok": True, **start_background_refresh_job(full=full)}
+
+
+@app.post("/background/tick")
+def background_tick(_actor: UserAccount | None = Depends(require_user_or_dispatch_token)) -> dict:
+    return {"ok": True, **start_background_refresh_job(full=False)}
 
 
 @app.post("/auth/register")

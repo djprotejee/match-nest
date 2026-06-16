@@ -14,7 +14,7 @@ async function runMatchNestMaintenance(env) {
   const headers = { "X-Notification-Dispatch-Token": dispatchToken };
 
   const health = await fetch(`${baseUrl}/health`, { cache: "no-store" });
-  const refresh = await fetch(`${baseUrl}/background/refresh`, { method: "POST", headers });
+  const refresh = await fetch(`${baseUrl}/background/tick`, { method: "POST", headers });
   const dispatch = await fetch(`${baseUrl}/notifications/dispatch`, { method: "POST", headers });
 
   return Response.json({

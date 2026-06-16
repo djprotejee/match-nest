@@ -330,12 +330,30 @@ def provider_should_refresh(provider_name: str, cache_key: str, start: datetime 
 
 
 def provider_refresh_ttl(provider_name: str, start: datetime | None = None, end: datetime | None = None) -> timedelta:
-    # ESPN has the most useful free football coverage for followed teams. Keep
-    # current/near-live windows fresh enough for final scores while leaving
-    # distant calendar months on a slower cadence.
-    if provider_name == "EspnFootballProvider" and range_is_near_now(start, end):
-        return timedelta(minutes=15)
+    # Minute cron jobs only need fresh data for live/recent windows. Broader
+    # schedule windows stay cached so hosted databases and free APIs are not
+    # burned by background maintenance.
+    if range_is_hot_window(start, end):
+        if provider_name == "PandaScoreCS2Provider":
+            return timedelta(minutes=2)
+        if provider_name in {"EspnFootballProvider", "JolpicaF1Provider"}:
+            return timedelta(minutes=5)
+    if provider_name == "PandaScoreCS2Provider":
+        return timedelta(minutes=20)
     return PROVIDER_REFRESH_TTL.get(provider_name, timedelta(hours=1))
+
+
+def range_is_hot_window(start: datetime | None, end: datetime | None) -> bool:
+    if start is None or end is None:
+        return False
+    now = datetime.now(timezone.utc)
+    start_utc = start.astimezone(timezone.utc)
+    end_utc = end.astimezone(timezone.utc)
+    return (
+        end_utc - start_utc <= timedelta(days=2)
+        and start_utc <= now + timedelta(hours=18)
+        and end_utc >= now - timedelta(hours=6)
+    )
 
 
 def range_is_near_now(start: datetime | None, end: datetime | None) -> bool:
