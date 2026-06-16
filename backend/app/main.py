@@ -4,7 +4,6 @@ import atexit
 import os
 import json
 import logging
-import signal
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -74,18 +73,10 @@ STARTED_AT = datetime.now(timezone.utc)
 REQUEST_COUNT = 0
 
 
-def _log_signal(signum: int, _frame) -> None:
-    LOGGER.warning("Received process signal %s – pid=%s uptime_seconds=%.2f requests=%s", signum, os.getpid(), (datetime.now(timezone.utc) - STARTED_AT).total_seconds(), REQUEST_COUNT)
-
 
 def _log_process_exit() -> None:
     LOGGER.warning("Process exiting – pid=%s uptime_seconds=%.2f requests=%s", os.getpid(), (datetime.now(timezone.utc) - STARTED_AT).total_seconds(), REQUEST_COUNT)
 
-
-for _signal_name in ("SIGTERM", "SIGINT"):
-    _signal_value = getattr(signal, _signal_name, None)
-    if _signal_value is not None:
-        signal.signal(_signal_value, _log_signal)
 
 atexit.register(_log_process_exit)
 
@@ -167,6 +158,9 @@ WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 _BACKGROUND_REFRESH_LOCK = threading.Lock()
 _BACKGROUND_REFRESH_RUNNING = False
 _BACKGROUND_REFRESH_LAST_RESULT: dict | None = None
+_NOTIFICATION_DISPATCH_LOCK = threading.Lock()
+_NOTIFICATION_DISPATCH_RUNNING = False
+_NOTIFICATION_DISPATCH_LAST_RESULT: dict | None = None
 
 
 class FollowUpdate(BaseModel):
@@ -338,14 +332,12 @@ def run_background_refresh_job(full: bool = False) -> None:
                     warmed.append(f"{user_id or 'default'}:{start.date()}:{end.date()}")
                 except Exception as exc:
                     errors.append(f"{user_id or 'default'}:{start.date()}:{exc}")
-        notification_result = dispatch_due_notifications()
         _BACKGROUND_REFRESH_LAST_RESULT = {
             "ok": not errors,
             "mode": mode,
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "warmed": warmed,
             "errors": errors,
-            "notifications": notification_result,
         }
     finally:
         with _BACKGROUND_REFRESH_LOCK:
@@ -361,6 +353,38 @@ def start_background_refresh_job(full: bool = False) -> dict:
     thread = threading.Thread(target=run_background_refresh_job, kwargs={"full": full}, daemon=True)
     thread.start()
     return {"accepted": True, "running": True, "mode": "full" if full else "tick", "last_result": _BACKGROUND_REFRESH_LAST_RESULT}
+
+
+def run_notification_dispatch_job() -> None:
+    global _NOTIFICATION_DISPATCH_LAST_RESULT, _NOTIFICATION_DISPATCH_RUNNING
+    try:
+        result = dispatch_due_notifications()
+        _NOTIFICATION_DISPATCH_LAST_RESULT = {
+            "ok": True,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            **result,
+        }
+    except Exception as exc:
+        LOGGER.exception("Notification dispatch failed")
+        _NOTIFICATION_DISPATCH_LAST_RESULT = {
+            "ok": False,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "error": str(exc),
+        }
+    finally:
+        with _NOTIFICATION_DISPATCH_LOCK:
+            _NOTIFICATION_DISPATCH_RUNNING = False
+
+
+def start_notification_dispatch_job() -> dict:
+    global _NOTIFICATION_DISPATCH_RUNNING
+    with _NOTIFICATION_DISPATCH_LOCK:
+        if _NOTIFICATION_DISPATCH_RUNNING:
+            return {"accepted": False, "running": True, "last_result": _NOTIFICATION_DISPATCH_LAST_RESULT}
+        _NOTIFICATION_DISPATCH_RUNNING = True
+    thread = threading.Thread(target=run_notification_dispatch_job, daemon=True)
+    thread.start()
+    return {"accepted": True, "running": True, "last_result": _NOTIFICATION_DISPATCH_LAST_RESULT}
 
 
 def build_verification_url(request: Request, token: str) -> str:
@@ -873,7 +897,7 @@ def remove_notification_rule(rule_id: str, current_user: UserAccount = Depends(r
 @app.post("/notifications/dispatch")
 def run_notifications(_actor: UserAccount | None = Depends(require_user_or_dispatch_token)) -> dict:
     # Manual/cron trigger is useful on free hosting where the service may sleep.
-    return dispatch_due_notifications()
+    return {"ok": True, **start_notification_dispatch_job()}
 
 
 @app.post("/background/refresh")
