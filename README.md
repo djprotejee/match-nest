@@ -125,6 +125,18 @@ TURSO_AUTH_TOKEN:   Turso auth token
 Persistent disk:    not needed
 ```
 
+Neon/Postgres to Turso migration:
+
+```powershell
+$env:SOURCE_DATABASE_URL='postgresql://old-neon-url'
+$env:TURSO_DATABASE_URL='libsql://your-db.turso.io'
+$env:TURSO_AUTH_TOKEN='your-turso-token'
+.\backend\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
+.\backend\.venv\Scripts\python.exe .\backend\scripts\migrate_postgres_to_turso.py
+```
+
+After the migration succeeds, set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in Render, then clear `DATABASE_URL` so the app no longer connects to Neon.
+
 Google OAuth setup:
 
 ```text
