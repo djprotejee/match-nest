@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from app.models import EntityKind, Event, EventStatus, F1Session, Follow, FollowLevel, Sport
 from app.storage import (
+    LibsqlConnection,
     authenticate_user,
     create_session,
     create_custom_entity,
@@ -38,6 +39,38 @@ from app.storage import (
     user_for_session,
     verify_email,
 )
+
+
+class _FakeLibsqlCursor:
+    description = [("value",)]
+    lastrowid = None
+
+    def fetchone(self) -> None:
+        return None
+
+    def fetchall(self) -> list[dict[str, str]]:
+        return [{"value": "ok"}]
+
+
+class _FakeLibsqlConnection:
+    def __init__(self, fail_first: bool = False) -> None:
+        self.fail_first = fail_first
+        self.execute_calls = 0
+        self.closed = False
+        self.commit_calls = 0
+
+    def execute(self, sql: str, params: tuple[object, ...]) -> _FakeLibsqlCursor:
+        self.execute_calls += 1
+        if self.fail_first:
+            self.fail_first = False
+            raise ValueError('Hrana: `api error: `status=404 Not Found, body={"error":"stream not found: 3e99ddfc:22c15e"}``')
+        return _FakeLibsqlCursor()
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class StorageTests(unittest.TestCase):
@@ -343,6 +376,19 @@ class StorageTests(unittest.TestCase):
         self.assertTrue(user_wants_lastrowid)
         self.assertTrue(user_insert.endswith("RETURNING id"))
         self.assertIn("VALUES (%s, %s, %s, %s)", user_insert)
+
+    def test_libsql_connection_reconnects_after_transient_hrana_stream_error(self) -> None:
+        first_connection = _FakeLibsqlConnection(fail_first=True)
+        second_connection = _FakeLibsqlConnection()
+
+        with patch("app.storage.libsql.connect", side_effect=[first_connection, second_connection]):
+            connection = LibsqlConnection("libsql://matchnest.turso.io", "token")
+            cursor = connection.execute("SELECT 1", ())
+
+        self.assertTrue(first_connection.closed)
+        self.assertEqual(first_connection.execute_calls, 1)
+        self.assertEqual(second_connection.execute_calls, 1)
+        self.assertEqual(cursor.fetchall(), [{"value": "ok"}])
 
 
 if __name__ == "__main__":

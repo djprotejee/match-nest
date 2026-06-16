@@ -137,17 +137,47 @@ class LibsqlConnection:
             raise RuntimeError("TURSO_DATABASE_URL is set, but libsql is not installed.")
         if not auth_token:
             raise RuntimeError("TURSO_DATABASE_URL is set, but TURSO_AUTH_TOKEN is empty.")
-        self.connection = libsql.connect(database=database_url, auth_token=auth_token)
+        self.database_url = database_url
+        self.auth_token = auth_token
+        self.connection = self._open_connection()
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> LibsqlCursor:
-        cursor = self.connection.execute(sql, tuple(params))
+        bound_params = tuple(params)
+        try:
+            cursor = self.connection.execute(sql, bound_params)
+        except ValueError as exc:
+            if not self._is_transient_hrana_error(exc):
+                raise
+            self._reconnect()
+            cursor = self.connection.execute(sql, bound_params)
         return LibsqlCursor(cursor, getattr(cursor, "lastrowid", None))
 
     def commit(self) -> None:
-        self.connection.commit()
+        try:
+            self.connection.commit()
+        except ValueError as exc:
+            if not self._is_transient_hrana_error(exc):
+                raise
+            self._reconnect()
+            self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()
+
+    def _open_connection(self) -> Any:
+        return libsql.connect(database=self.database_url, auth_token=self.auth_token)
+
+    def _reconnect(self) -> None:
+        try:
+            self.connection.close()
+        except Exception:
+            pass
+        self.connection = self._open_connection()
+
+    @staticmethod
+    def _is_transient_hrana_error(exc: ValueError) -> bool:
+        message = str(exc).lower()
+        return "hrana" in message and "stream not found" in message
 
 
 DatabaseConnection = sqlite3.Connection | PostgresConnection | LibsqlConnection
