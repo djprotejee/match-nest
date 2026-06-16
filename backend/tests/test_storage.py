@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import time
 import unittest
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -40,6 +41,13 @@ from app.storage import (
 
 
 class StorageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.env_patch = patch.dict(os.environ, {"DATABASE_URL": "", "TURSO_DATABASE_URL": ""})
+        self.env_patch.start()
+
+    def tearDown(self) -> None:
+        self.env_patch.stop()
+
     def test_events_roundtrip_through_sqlite(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
@@ -251,6 +259,28 @@ class StorageTests(unittest.TestCase):
                 self.assertEqual(first_preferences.follows["ferrari"].level, FollowLevel.MAIN)
                 self.assertEqual(second_preferences.follows["ferrari"].level, FollowLevel.STARRED)
                 self.assertEqual(first_preferences.f1_sessions, {F1Session.RACE, F1Session.PRACTICE})
+
+    def test_user_preferences_fall_back_when_sessions_payload_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
+                user, _ = create_user("broken-settings@example.com", "correct horse battery")
+
+                import sqlite3
+
+                connection = sqlite3.connect(Path(temp_dir) / "matchnest.sqlite")
+                try:
+                    connection.execute(
+                        "UPDATE user_settings SET f1_sessions = ?, timezone = ? WHERE user_id = ?",
+                        ('["race","broken-session"]', "", user.id),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+
+                preferences = preferences_for_user(user.id)
+
+                self.assertEqual(preferences.f1_sessions, {F1Session.RACE, F1Session.QUALIFYING, F1Session.SPRINT})
+                self.assertEqual(preferences.timezone, "Europe/Kyiv")
 
     def test_custom_entity_can_be_updated_and_deleted(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

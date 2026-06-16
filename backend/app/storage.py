@@ -727,9 +727,16 @@ def preferences_for_user(user_id: int | None) -> UserPreferences:
 
     preferences = UserPreferences()
     if settings_row:
-        preferences.f1_sessions = {F1Session(item) for item in json.loads(settings_row["f1_sessions"])}
+        raw_sessions = settings_row["f1_sessions"]
+        try:
+            decoded_sessions = json.loads(raw_sessions) if isinstance(raw_sessions, str) else list(raw_sessions or [])
+            parsed_sessions = {F1Session(item) for item in decoded_sessions}
+            if parsed_sessions:
+                preferences.f1_sessions = parsed_sessions
+        except (TypeError, ValueError, json.JSONDecodeError):
+            preferences.f1_sessions = set(DEFAULT_PREFERENCES.f1_sessions)
         preferences.default_hide_spoilers = bool(settings_row["default_hide_spoilers"])
-        preferences.timezone = settings_row["timezone"]
+        preferences.timezone = settings_row["timezone"] or DEFAULT_PREFERENCES.timezone
     if ui_state_row:
         try:
             preferences.ui_state = json.loads(ui_state_row["state_json"])
