@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import atexit
 import os
 import json
+import logging
+import signal
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -64,10 +67,32 @@ from .storage import (
 )
 
 app = FastAPI(title="MatchNest API", version="0.1.0")
+LOGGER = logging.getLogger("matchnest")
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s – %(message)s")
+STARTED_AT = datetime.now(timezone.utc)
+REQUEST_COUNT = 0
+
+
+def _log_signal(signum: int, _frame) -> None:
+    LOGGER.warning("Received process signal %s – pid=%s uptime_seconds=%.2f requests=%s", signum, os.getpid(), (datetime.now(timezone.utc) - STARTED_AT).total_seconds(), REQUEST_COUNT)
+
+
+def _log_process_exit() -> None:
+    LOGGER.warning("Process exiting – pid=%s uptime_seconds=%.2f requests=%s", os.getpid(), (datetime.now(timezone.utc) - STARTED_AT).total_seconds(), REQUEST_COUNT)
+
+
+for _signal_name in ("SIGTERM", "SIGINT"):
+    _signal_value = getattr(signal, _signal_name, None)
+    if _signal_value is not None:
+        signal.signal(_signal_value, _log_signal)
+
+atexit.register(_log_process_exit)
 
 
 @app.on_event("startup")
 def warm_default_calendar_cache_on_startup() -> None:
+    LOGGER.info("Application startup – pid=%s backend=%s", os.getpid(), active_database_backend())
     if os.getenv("MATCHNEST_STARTUP_WARMUP", "").strip() == "1":
         # Optional local warmup so development can pre-fill cache without
         # making hosted instances do heavy provider work during boot.
@@ -76,6 +101,16 @@ def warm_default_calendar_cache_on_startup() -> None:
     if os.getenv("MATCHNEST_INTERNAL_NOTIFICATION_LOOP", "").strip() == "1":
         notification_thread = threading.Thread(target=notification_dispatch_loop, daemon=True)
         notification_thread.start()
+
+
+@app.on_event("shutdown")
+def log_shutdown() -> None:
+    LOGGER.warning(
+        "Application shutdown – pid=%s uptime_seconds=%.2f requests=%s",
+        os.getpid(),
+        (datetime.now(timezone.utc) - STARTED_AT).total_seconds(),
+        REQUEST_COUNT,
+    )
 
 
 def warm_default_calendar_cache() -> None:
@@ -109,6 +144,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_diagnostics(request: Request, call_next):
+    global REQUEST_COUNT
+    REQUEST_COUNT += 1
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        LOGGER.exception("Unhandled request exception – method=%s path=%s query=%s", request.method, request.url.path, request.url.query)
+        raise
+    duration_ms = round((time.perf_counter() - started) * 1000, 2)
+    if response.status_code >= 500:
+        LOGGER.error("Server error response – method=%s path=%s status=%s duration_ms=%s", request.method, request.url.path, response.status_code, duration_ms)
+    elif duration_ms >= 1500:
+        LOGGER.warning("Slow request – method=%s path=%s status=%s duration_ms=%s", request.method, request.url.path, response.status_code, duration_ms)
+    return response
 
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 _BACKGROUND_REFRESH_LOCK = threading.Lock()
@@ -325,6 +378,16 @@ def health() -> dict:
 @app.get("/health/database")
 def database_health() -> dict:
     return active_database_backend()
+
+
+@app.get("/health/runtime")
+def runtime_health() -> dict:
+    return {
+        "pid": os.getpid(),
+        "started_at": STARTED_AT.isoformat(),
+        "uptime_seconds": round((datetime.now(timezone.utc) - STARTED_AT).total_seconds(), 2),
+        "requests": REQUEST_COUNT,
+    }
 
 
 @app.get("/sources")
