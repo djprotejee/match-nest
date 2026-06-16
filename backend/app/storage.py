@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import base64
@@ -8,6 +9,7 @@ import hashlib
 import hmac
 import secrets
 import threading
+import time
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,6 +32,7 @@ except ImportError:  # pragma: no cover - Turso is optional.
 
 
 DB_PATH = Path(__file__).resolve().parents[1] / ".data" / "matchnest.sqlite"
+LOGGER = logging.getLogger("matchnest")
 PASSWORD_ITERATIONS = 210_000
 SESSION_DAYS = 30
 VERIFICATION_HOURS = 24
@@ -106,17 +109,26 @@ class PostgresConnection:
 class LibsqlCursor:
     """Cursor adapter for Turso/libSQL's sqlite-like API."""
 
-    def __init__(self, cursor: Any, lastrowid: int | None = None) -> None:
+    def __init__(self, cursor: Any, lastrowid: int | None = None, sql_summary: str = "") -> None:
         self.cursor = cursor
         self.lastrowid = lastrowid
+        self.sql_summary = sql_summary
         description = getattr(cursor, "description", None) or []
         self.columns = [column[0] for column in description]
 
     def fetchone(self) -> dict[str, Any] | sqlite3.Row | None:
-        return self._row_to_mapping(self.cursor.fetchone())
+        started = time.perf_counter()
+        try:
+            return self._row_to_mapping(self.cursor.fetchone())
+        finally:
+            log_slow_libsql_operation("fetchone", self.sql_summary, started)
 
     def fetchall(self) -> list[dict[str, Any] | sqlite3.Row]:
-        return [self._row_to_mapping(row) for row in self.cursor.fetchall()]
+        started = time.perf_counter()
+        try:
+            return [self._row_to_mapping(row) for row in self.cursor.fetchall()]
+        finally:
+            log_slow_libsql_operation("fetchall", self.sql_summary, started)
 
     def _row_to_mapping(self, row: Any) -> dict[str, Any] | sqlite3.Row | None:
         if row is None:
@@ -145,6 +157,8 @@ class LibsqlConnection:
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> LibsqlCursor:
         bound_params = tuple(params)
+        sql_summary = summarize_sql(sql)
+        started = time.perf_counter()
         try:
             cursor = self.connection.execute(sql, bound_params)
         except ValueError as exc:
@@ -152,9 +166,12 @@ class LibsqlConnection:
                 raise
             self._reconnect()
             cursor = self.connection.execute(sql, bound_params)
-        return LibsqlCursor(cursor, getattr(cursor, "lastrowid", None))
+        finally:
+            log_slow_libsql_operation("execute", sql_summary, started)
+        return LibsqlCursor(cursor, getattr(cursor, "lastrowid", None), sql_summary)
 
     def commit(self) -> None:
+        started = time.perf_counter()
         try:
             self.connection.commit()
         except ValueError as exc:
@@ -162,6 +179,8 @@ class LibsqlConnection:
                 raise
             self._reconnect()
             self.connection.commit()
+        finally:
+            log_slow_libsql_operation("commit", "COMMIT", started)
 
     def close(self) -> None:
         if self.persistent:
@@ -185,6 +204,23 @@ class LibsqlConnection:
 
 
 DatabaseConnection = sqlite3.Connection | PostgresConnection | LibsqlConnection
+
+
+def slow_libsql_threshold_ms() -> float:
+    try:
+        return float(os.getenv("MATCHNEST_SLOW_DB_MS", "1000"))
+    except ValueError:
+        return 1000.0
+
+
+def summarize_sql(sql: str) -> str:
+    return " ".join(sql.strip().split())[:180]
+
+
+def log_slow_libsql_operation(phase: str, sql_summary: str, started: float) -> None:
+    duration_ms = round((time.perf_counter() - started) * 1000, 2)
+    if duration_ms >= slow_libsql_threshold_ms():
+        LOGGER.warning("Slow Turso DB operation - phase=%s duration_ms=%s sql=%s", phase, duration_ms, sql_summary)
 
 
 def _persistent_libsql_connection(database_url: str, auth_token: str) -> LibsqlConnection:

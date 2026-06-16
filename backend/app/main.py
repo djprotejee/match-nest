@@ -396,7 +396,7 @@ def build_verification_url(request: Request, token: str) -> str:
 
 
 @app.get("/health")
-def health() -> dict:
+async def health() -> dict:
     return {"status": "ok", "timezone": "Europe/Kyiv"}
 
 
