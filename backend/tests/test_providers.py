@@ -13,6 +13,7 @@ from app.providers.registry import (
     followed_football_competitions,
     followed_football_team_queries,
     f1_race_details_are_complete,
+    provider_allows_stale_event_deletion,
     provider_refresh_ttl,
     provider_should_refresh,
     event_details_cache_ttl,
@@ -97,6 +98,10 @@ class ProviderMappingTests(unittest.TestCase):
 
         self.assertFalse(f1_race_details_are_complete(broken_details))
         self.assertTrue(f1_race_details_are_complete(complete_details))
+
+    def test_pandascore_refresh_does_not_delete_stale_events(self) -> None:
+        self.assertFalse(provider_allows_stale_event_deletion("PandaScoreCS2Provider"))
+        self.assertTrue(provider_allows_stale_event_deletion("F4CalendarProvider"))
 
     def test_f1_standings_sections_map_driver_and_constructor_tables(self) -> None:
         driver_payload = {

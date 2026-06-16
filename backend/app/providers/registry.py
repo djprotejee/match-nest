@@ -202,7 +202,8 @@ def refresh_provider(
     try:
         provider_events = provider.fetch(start=start, end=end)
         upsert_events(provider_events)
-        delete_stale_events_for_source(provider.source, start, end, [event.id for event in provider_events])
+        if provider_allows_stale_event_deletion(provider_name):
+            delete_stale_events_for_source(provider.source, start, end, [event.id for event in provider_events])
         mark_provider_fetch(provider_name, cache_key, "ok")
         _CACHE.pop(cache_key, None)
         return provider_events
@@ -215,6 +216,10 @@ def refresh_provider(
         mark_provider_fetch(provider_name, cache_key, "error", str(exc))
         _CACHE.pop(cache_key, None)
         raise
+
+
+def provider_allows_stale_event_deletion(provider_name: str) -> bool:
+    return provider_name in {"F4CalendarProvider"}
 
 
 def fetch_events(
