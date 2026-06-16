@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -53,28 +54,23 @@ def main() -> None:
     if not turso_url or not turso_token:
         raise SystemExit("Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN for the target Turso database.")
 
-    # Neon can terminate long idle transactions while the script writes a large
-    # table to Turso. Autocommit keeps each SELECT outside a lingering
-    # transaction, making the migration safe to resume table by table.
-    source = psycopg.connect(source_url, row_factory=dict_row, autocommit=True)
     target = LibsqlConnection(turso_url, turso_token)
 
     try:
         init_db(target)
         copied_total = 0
         for table in TABLES:
-            copied = copy_table(source, target, table)
+            copied = copy_table(source_url, target, table)
             copied_total += copied
             print(f"{table}: {copied}")
         target.commit()
         print(f"Migration complete. Rows copied: {copied_total}")
     finally:
-        source.close()
         target.close()
 
 
-def copy_table(source: psycopg.Connection, target: LibsqlConnection, table: str) -> int:
-    rows = list(source.execute(f"SELECT * FROM {table}").fetchall())
+def copy_table(source_url: str, target: LibsqlConnection, table: str) -> int:
+    rows = read_source_table(source_url, table)
     if not rows:
         return 0
 
@@ -87,6 +83,25 @@ def copy_table(source: psycopg.Connection, target: LibsqlConnection, table: str)
         target.execute(sql, [normalize_value(row[column]) for column in columns])
     target.commit()
     return len(rows)
+
+
+def read_source_table(source_url: str, table: str) -> list[dict[str, Any]]:
+    for attempt in range(1, 4):
+        source = None
+        try:
+            # Neon may terminate long-lived connections when a free project is
+            # throttled or restarting. Keep source connections short: read one
+            # table, close the connection, then write that table to Turso.
+            source = psycopg.connect(source_url, row_factory=dict_row, autocommit=True)
+            return list(source.execute(f"SELECT * FROM {table}").fetchall())
+        except psycopg.Error:
+            if attempt == 3:
+                raise
+            time.sleep(attempt * 2)
+        finally:
+            if source is not None:
+                source.close()
+    return []
 
 
 def normalize_value(value: Any) -> Any:
