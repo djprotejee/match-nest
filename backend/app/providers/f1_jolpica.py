@@ -51,7 +51,7 @@ class JolpicaF1Provider(EventProvider):
             race_name = race.get("raceName", "Formula 1 Grand Prix")
             round_id = race.get("round", "0")
             events.extend(self._race_sessions(race, race_name, round_id))
-        return events
+        return [event for event in events if event.starts_at and (start is None or event.starts_at >= start) and (end is None or event.starts_at < end)]
 
     def _race_sessions(self, race: dict, race_name: str, round_id: str) -> list[Event]:
         # Jolpica exposes a race weekend as one race object with nested session

@@ -209,7 +209,7 @@ class ProviderMappingTests(IsolatedTestCase):
         self.assertIn("ukraine_nt", followed_football_team_queries(DEFAULT_PREFERENCES))
         self.assertEqual(followed_football_competitions(DEFAULT_PREFERENCES), {"ucl": "CL", "world_cup": "WC", "euro": "EC"})
 
-    def test_registry_retries_after_provider_error(self) -> None:
+    def test_registry_backs_off_after_provider_error(self) -> None:
         from app.storage import mark_provider_fetch
         from pathlib import Path
         from tempfile import TemporaryDirectory
@@ -219,7 +219,7 @@ class ProviderMappingTests(IsolatedTestCase):
             with patch("app.storage.DB_PATH", Path(temp_dir) / "matchnest.sqlite"):
                 mark_provider_fetch("FootballDataProvider", "range", "error", "HTTP 429")
 
-                self.assertTrue(provider_should_refresh("FootballDataProvider", "range"))
+                self.assertFalse(provider_should_refresh("FootballDataProvider", "range"))
 
     def test_event_details_cache_ttl_is_longer_for_past_events(self) -> None:
         past_event = Event(

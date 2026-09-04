@@ -153,8 +153,7 @@ class FootballDataProvider(EventProvider):
                 f"{self.teams_url}?{query}",
                 headers={"X-Auth-Token": self.token},
             )
-            with urlopen(request, timeout=20) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            payload = self._request_payload(request)
             chunk = payload.get("teams", [])
             teams.extend(chunk)
             if len(chunk) < limit:
@@ -175,8 +174,7 @@ class FootballDataProvider(EventProvider):
             f"{self.team_url.format(team_id=team_id)}?{query}",
             headers={"X-Auth-Token": self.token},
         )
-        with urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = self._request_payload(request)
         matches = payload.get("matches", [])
         for match in matches:
             match.setdefault("_matchnest_entity_ids", []).append(entity_id)
@@ -201,15 +199,33 @@ class FootballDataProvider(EventProvider):
                 f"{self.url}?{query}",
                 headers={"X-Auth-Token": self.token},
             )
-            with urlopen(request, timeout=20) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            payload = self._request_payload(request)
             matches.extend(payload.get("matches", []))
             current = chunk_end + timedelta(days=1)
         return matches
 
+    def _request_payload(self, request: Request) -> dict:
+        global _RATE_LIMIT_UNTIL
+        cache_key = f"request:{request.full_url}"
+        cached = provider_payload_state("football-data", cache_key)
+        now = datetime.now(timezone.utc)
+        if cached and now - cached.fetched_at < FOOTBALL_CACHE_TTL and isinstance(cached.payload, dict):
+            return cached.payload
+        if _RATE_LIMIT_UNTIL is not None and now < _RATE_LIMIT_UNTIL:
+            raise RuntimeError(f"FootballDataProvider is rate-limited until {_RATE_LIMIT_UNTIL.isoformat()}")
+        try:
+            with urlopen(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code == 429:
+                _RATE_LIMIT_UNTIL = now + timedelta(seconds=90)
+            raise
+        upsert_provider_payload_cache("football-data", cache_key, payload)
+        return payload
+
     def _match_to_event(self, item: dict) -> Event:
-        home = item.get("homeTeam", {}).get("name", "Home")
-        away = item.get("awayTeam", {}).get("name", "Away")
+        home = (item.get("homeTeam") or {}).get("name") or "Home TBD"
+        away = (item.get("awayTeam") or {}).get("name") or "Away TBD"
         competition = item.get("competition", {}).get("name")
         entity_ids = football_entity_ids(home, away, competition)
         entity_ids.extend(item.get("_matchnest_entity_ids", []))
@@ -290,7 +306,7 @@ def football_competition_entities() -> dict[str, str]:
 def football_team_entities() -> dict[str, int]:
     # Team IDs are provider-specific. Keep them configurable so the product can
     # be corrected without code changes if football-data changes an identifier.
-    values = {"barcelona": 81, **parse_entity_id_map(os.getenv("FOOTBALL_DATA_TEAM_IDS", ""))}
+    values = {"barcelona": 81, "ukraine_nt": 794, **parse_entity_id_map(os.getenv("FOOTBALL_DATA_TEAM_IDS", ""))}
     return values
 
 

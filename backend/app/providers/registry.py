@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -54,7 +55,17 @@ try:
     _PROVIDER_MAX_WORKERS = max(1, int(os.getenv("MATCHNEST_PROVIDER_MAX_WORKERS", "2").strip() or "2"))
 except ValueError:
     _PROVIDER_MAX_WORKERS = 2
+# Give each upstream its own serial queue. A large CS2 history refresh must
+# not keep football fixtures waiting behind thousands of database writes.
 _PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=_PROVIDER_MAX_WORKERS)
+_PROVIDER_EXECUTORS: dict[str, ThreadPoolExecutor] = {}
+
+
+def provider_executor(name: str) -> ThreadPoolExecutor:
+    # Called while _IN_FLIGHT_LOCK is held.
+    if name not in _PROVIDER_EXECUTORS:
+        _PROVIDER_EXECUTORS[name] = ThreadPoolExecutor(max_workers=1, thread_name_prefix=name)
+    return _PROVIDER_EXECUTORS[name]
 _IN_FLIGHT_LOCK = threading.Lock()
 _IN_FLIGHT_REFRESHES: dict[str, Future] = {}
 
@@ -178,7 +189,7 @@ def refresh_provider_async(
         existing = _IN_FLIGHT_REFRESHES.get(refresh_key)
         if existing and not existing.done():
             return existing
-        future = _PROVIDER_EXECUTOR.submit(refresh_provider, provider, provider_name, cache_key, start, end)
+        future = provider_executor(provider_name).submit(refresh_provider, provider, provider_name, cache_key, start, end)
         _IN_FLIGHT_REFRESHES[refresh_key] = future
     # A completed future invokes its callback immediately. Register outside the
     # lock so a fast/empty provider cannot deadlock every subsequent refresh.
@@ -216,6 +227,8 @@ def refresh_provider(
         if provider_allows_stale_event_deletion(provider_name):
             delete_stale_events_for_source(provider.source, start, end, [event.id for event in provider_events])
         errors = getattr(provider, "refresh_errors", [])
+        if errors:
+            logging.getLogger("matchnest").warning("Provider partial refresh: %s %s %s", provider_name, cache_key, "; ".join(errors))
         mark_provider_fetch(provider_name, cache_key, "error" if errors else "ok", "; ".join(errors) if errors else None)
         _CACHE.pop(cache_key, None)
         return provider_events
@@ -225,6 +238,7 @@ def refresh_provider(
         _CACHE.pop(cache_key, None)
         raise
     except Exception as exc:
+        logging.getLogger("matchnest").warning("Provider refresh failed: %s %s %s", provider_name, cache_key, exc)
         mark_provider_fetch(provider_name, cache_key, "error", str(exc))
         _CACHE.pop(cache_key, None)
         raise
@@ -363,7 +377,7 @@ def provider_should_refresh(provider_name: str, cache_key: str, start: datetime 
     if fetch_state is None:
         return True
     if fetch_state.status != "ok":
-        return True
+        return datetime.now(timezone.utc) - fetch_state.fetched_at >= timedelta(minutes=2)
     ttl = provider_refresh_ttl(provider_name, start, end)
     return datetime.now(timezone.utc) - fetch_state.fetched_at >= ttl
 
@@ -403,15 +417,13 @@ def range_is_near_now(start: datetime | None, end: datetime | None) -> bool:
 
 
 def provider_matches_event(provider_name: str, event: Event) -> bool:
-    if provider_name == "JolpicaF1Provider":
-        return event.source == "jolpica"
-    if provider_name == "F4CalendarProvider":
-        return event.source == "f4-calendar"
-    if provider_name in {"FootballDataProvider", "EspnFootballProvider", "ApiFootballProvider", "TheSportsDBFootballProvider"}:
-        return event.sport == Sport.FOOTBALL
-    if provider_name == "PandaScoreCS2Provider":
-        return event.sport == Sport.CS2
-    return False
+    sources = {
+        "JolpicaF1Provider": "jolpica", "F4CalendarProvider": "f4-calendar",
+        "FootballDataProvider": "football-data", "EspnFootballProvider": "espn",
+        "ApiFootballProvider": "api-football", "TheSportsDBFootballProvider": "thesportsdb",
+        "PandaScoreCS2Provider": "pandascore",
+    }
+    return event.source == sources.get(provider_name)
 
 
 def range_cache_key(start: datetime | None, end: datetime | None, preferences: UserPreferences | None = None) -> str:

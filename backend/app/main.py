@@ -22,7 +22,7 @@ from .emailer import send_verification_email
 from .entity_service import default_entity_color, entity_bindings_from_payload, entity_payload, provider_search_candidates
 from .models import EntityKind, Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserAccount
 from .notifications import dispatch_due_notifications, notification_settings_payload, push_config, rule_payload
-from .providers.registry import fetch_event_details, fetch_events, provider_results, refresh_is_running
+from .providers.registry import fetch_event_details, fetch_events, provider_results, refresh_is_running, configured_providers, provider_is_configured, provider_matches_event, range_cache_key
 from .service import (
     effective_event_status,
     filter_events,
@@ -50,6 +50,8 @@ from .storage import (
     get_or_create_oauth_user,
     list_entity_records,
     list_user_ids,
+    list_events,
+    provider_fetch_state,
     preferences_for_user,
     search_entity_records,
     set_user_f1_sessions,
@@ -425,18 +427,30 @@ def runtime_health() -> dict:
 
 
 @app.get("/sources")
-def sources(current_user: UserAccount | None = Depends(optional_user)) -> list[dict]:
+def sources(
+    year: int | None = None,
+    month: int | None = None,
+    current_user: UserAccount | None = Depends(optional_user),
+) -> list[dict]:
     preferences = preferences_for_user(current_user.id if current_user else None)
-    results, _ = provider_results(preferences=preferences)
-    return [
-        {
-            "name": result.name,
-            "configured": result.configured,
-            "count": result.count,
-            "error": result.error,
-        }
-        for result in results
-    ]
+    if (year is None) != (month is None) or (month is not None and not 1 <= month <= 12):
+        raise HTTPException(status_code=400, detail="Provide a valid year and month together.")
+    start, end = month_range(year, month) if year is not None else (None, None)
+    events = list_events(start, end)
+    key = range_cache_key(start, end, preferences)
+    output = []
+    for provider in configured_providers(preferences):
+        name = type(provider).__name__
+        state = provider_fetch_state(name, key)
+        output.append({
+            "name": name,
+            "configured": provider_is_configured(provider),
+            "count": sum(provider_matches_event(name, event) for event in events),
+            "error": state.error if state else None,
+            "status": state.status if state else "not_fetched",
+            "fetched_at": state.fetched_at.isoformat() if state else None,
+        })
+    return output
 
 
 @app.get("/entities")

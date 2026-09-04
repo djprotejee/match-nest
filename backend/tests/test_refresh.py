@@ -61,7 +61,8 @@ class RefreshTests(IsolatedTestCase):
     def test_completed_refresh_callback_does_not_deadlock(self):
         future = Future()
         future.set_result([])
-        with patch.object(registry._PROVIDER_EXECUTOR, "submit", return_value=future):
+        with patch("app.providers.registry.provider_executor") as executor:
+            executor.return_value.submit.return_value = future
             thread = Thread(target=registry.refresh_provider_async, args=("instant", PandaScoreCS2Provider(token="test"), "PandaScoreCS2Provider", "instant", None, None), daemon=True)
             thread.start()
             thread.join(timeout=1)
@@ -104,3 +105,65 @@ class RefreshTests(IsolatedTestCase):
             items = provider._fetch_bucket("past", start=start, end=end)
         self.assertEqual(len(items), 2)
         fetch.assert_called_once()
+
+    def test_football_429_stops_requests_across_instances(self):
+        from urllib.request import Request
+        from app.providers import football_data
+        with patch.object(football_data, "_RATE_LIMIT_UNTIL", None), patch.object(football_data, "urlopen", side_effect=HTTPError("https://example.com",429,"Too many requests",{},None)) as fetch:
+            with self.assertRaises(HTTPError):
+                FootballDataProvider(token="test")._request_payload(Request("https://example.com/team1"))
+            with self.assertRaisesRegex(RuntimeError, "rate-limited"):
+                FootballDataProvider(token="test")._request_payload(Request("https://example.com/team2"))
+            self.assertEqual(fetch.call_count, 1)
+
+    def test_successful_team_request_is_cached_despite_other_feed_failures(self):
+        from urllib.request import Request
+        from app.providers import football_data
+        with patch.object(football_data, "_RATE_LIMIT_UNTIL", None), patch.object(football_data, "urlopen", return_value=BytesIO(b'{"matches": [{"id": 123}]}')) as fetch:
+            request = Request("https://example.com/barcelona")
+            expected = FootballDataProvider(token="test")._request_payload(request)
+            actual = FootballDataProvider(token="test")._request_payload(request)
+        self.assertEqual(actual, expected)
+        self.assertEqual(fetch.call_count, 1)
+
+    def test_error_backoff_expires(self):
+        from datetime import timedelta
+        from app.storage import ProviderFetchState
+        state = ProviderFetchState(datetime.now(timezone.utc)-timedelta(minutes=3), "error", "HTTP 429")
+        with patch.object(registry, "provider_fetch_state", return_value=state):
+            self.assertTrue(registry.provider_should_refresh("FootballDataProvider", "retry"))
+
+    def test_football_does_not_wait_for_cs2_history(self):
+        from threading import Event as Signal
+        release = Signal()
+        started = Signal()
+        def fetch(provider, name, *args):
+            if name == "PandaScoreCS2Provider":
+                started.set()
+                release.wait(2)
+            return []
+        try:
+            with patch.object(registry, "refresh_provider", side_effect=fetch):
+                slow = registry.refresh_provider_async("slow-test", None, "PandaScoreCS2Provider", "slow-test", None, None)
+                self.assertTrue(started.wait(1))
+                fast = registry.refresh_provider_async("fast-test", None, "FootballDataProvider", "fast-test", None, None)
+                self.assertEqual(fast.result(timeout=1), [])
+        finally:
+            release.set()
+            slow.result(timeout=2)
+
+    def test_null_tournament_opponent_does_not_discard_barcelona_results(self):
+        event = FootballDataProvider(token="test")._match_to_event({"id":123,"utcDate":"2026-09-06T14:15:00Z","homeTeam":{"name":None},"awayTeam":None,"competition":{"name":"UEFA Champions League"},"status":"SCHEDULED"})
+        self.assertEqual(event.title, "Home TBD vs Away TBD")
+
+    def test_postgres_event_batch_uses_pipeline(self):
+        from unittest.mock import MagicMock
+        from app.storage import PostgresConnection, upsert_events
+        connection = MagicMock(spec=PostgresConnection)
+        connection.connection = MagicMock()
+        event = Event(id="batch",title="Batch",sport=Sport.CS2,starts_at=None,status=EventStatus.TBD,entity_ids=[],source="pandascore")
+        with patch("app.storage.connect", return_value=connection):
+            upsert_events([event, event])
+        connection.connection.pipeline.assert_called_once()
+        self.assertEqual(connection.execute.call_count, 2)
+        connection.commit.assert_called_once()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import logging
 import os
 import sqlite3
@@ -1396,49 +1397,50 @@ def upsert_events(events: Iterable[Event]) -> None:
     now = datetime.now(timezone.utc).isoformat()
     connection = connect()
     try:
-        for event in items:
-            payload = event_to_payload(event)
-            connection.execute(
-                """
-                INSERT INTO events (
-                    id, title, sport, starts_at, status, entity_ids, source,
-                    competition, session_type, result_summary, importance,
-                    raw_json, first_seen_at, last_seen_at, updated_at
+        with connection.connection.pipeline() if isinstance(connection, PostgresConnection) else nullcontext():
+            for event in items:
+                payload = event_to_payload(event)
+                connection.execute(
+                    """
+                    INSERT INTO events (
+                        id, title, sport, starts_at, status, entity_ids, source,
+                        competition, session_type, result_summary, importance,
+                        raw_json, first_seen_at, last_seen_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        title = excluded.title,
+                        sport = excluded.sport,
+                        starts_at = excluded.starts_at,
+                        status = excluded.status,
+                        entity_ids = excluded.entity_ids,
+                        source = excluded.source,
+                        competition = excluded.competition,
+                        session_type = excluded.session_type,
+                        result_summary = excluded.result_summary,
+                        importance = excluded.importance,
+                        raw_json = excluded.raw_json,
+                        last_seen_at = excluded.last_seen_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        event.id,
+                        event.title,
+                        event.sport.value,
+                        event.starts_at.isoformat() if event.starts_at else None,
+                        event.status.value,
+                        json.dumps(event.entity_ids, ensure_ascii=False),
+                        event.source,
+                        event.competition,
+                        event.session_type.value if event.session_type else None,
+                        event.result_summary,
+                        event.importance,
+                        json.dumps(payload, ensure_ascii=False),
+                        now,
+                        now,
+                        now,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title,
-                    sport = excluded.sport,
-                    starts_at = excluded.starts_at,
-                    status = excluded.status,
-                    entity_ids = excluded.entity_ids,
-                    source = excluded.source,
-                    competition = excluded.competition,
-                    session_type = excluded.session_type,
-                    result_summary = excluded.result_summary,
-                    importance = excluded.importance,
-                    raw_json = excluded.raw_json,
-                    last_seen_at = excluded.last_seen_at,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    event.id,
-                    event.title,
-                    event.sport.value,
-                    event.starts_at.isoformat() if event.starts_at else None,
-                    event.status.value,
-                    json.dumps(event.entity_ids, ensure_ascii=False),
-                    event.source,
-                    event.competition,
-                    event.session_type.value if event.session_type else None,
-                    event.result_summary,
-                    event.importance,
-                    json.dumps(payload, ensure_ascii=False),
-                    now,
-                    now,
-                    now,
-                ),
-            )
         connection.commit()
     finally:
         connection.close()
@@ -1694,23 +1696,24 @@ def initialize_user_preferences(connection: sqlite3.Connection, user_id: int) ->
                 now,
             ),
         )
-    for follow in DEFAULT_PREFERENCES.follows.values():
-        connection.execute(
-            """
-            INSERT OR IGNORE INTO user_follows (
-                user_id, entity_id, level, notifications_enabled, hide_spoilers, updated_at
+    with connection.connection.pipeline() if isinstance(connection, PostgresConnection) else nullcontext():
+        for follow in DEFAULT_PREFERENCES.follows.values():
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO user_follows (
+                    user_id, entity_id, level, notifications_enabled, hide_spoilers, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    follow.entity_id,
+                    follow_level_value(follow.level),
+                    int(follow.notifications_enabled),
+                    int(follow.hide_spoilers),
+                    now,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                user_id,
-                follow.entity_id,
-                follow_level_value(follow.level),
-                int(follow.notifications_enabled),
-                int(follow.hide_spoilers),
-                now,
-            ),
-        )
 
 
 def sync_seed_entities(connection: sqlite3.Connection) -> None:
