@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .http_cache import cached_urlopen as urlopen
 
 from .base import EventProvider
 from ..models import Event, EventStatus, Sport
@@ -34,9 +36,9 @@ class FootballDataProvider(EventProvider):
     ) -> None:
         self.refresh_errors: list[str] = []
         self.token = token or os.getenv("FOOTBALL_DATA_TOKEN")
-        self.competition_entities = competition_entities or football_competition_entities()
-        self.team_entities = team_entities or football_team_entities()
-        self.team_queries = team_queries or football_team_queries()
+        self.competition_entities = competition_entities if competition_entities is not None else football_competition_entities()
+        self.team_entities = team_entities if team_entities is not None else {key: value for key, value in football_team_entities().items() if team_queries is None or key in team_queries}
+        self.team_queries = team_queries if team_queries is not None else football_team_queries()
         self.url = url
         self.team_url = team_url
         self.teams_url = teams_url
@@ -52,6 +54,9 @@ class FootballDataProvider(EventProvider):
         end_date = (end.astimezone(timezone.utc) if end else datetime.now(timezone.utc) + timedelta(days=30)).date()
         cache_path = football_cache_path(start_date.isoformat(), end_date.isoformat())
         cache_key = football_matches_cache_key(start_date.isoformat(), end_date.isoformat())
+        scope = hashlib.sha256(json.dumps([self.team_entities, self.team_queries, self.competition_entities, self.token], sort_keys=True).encode()).hexdigest()[:24]
+        cache_key += ":" + scope
+        cache_path = cache_path.with_name(f"{cache_path.stem}-{scope}{cache_path.suffix}")
         db_cached = read_fresh_provider_matches(cache_key, FOOTBALL_CACHE_TTL)
         if db_cached is not None:
             return [self._match_to_event(item) for item in db_cached]
@@ -206,7 +211,7 @@ class FootballDataProvider(EventProvider):
 
     def _request_payload(self, request: Request) -> dict:
         global _RATE_LIMIT_UNTIL
-        cache_key = f"request:{request.full_url}"
+        cache_key = "request:v2:" + hashlib.sha256((request.full_url + (self.token or "")).encode()).hexdigest()
         cached = provider_payload_state("football-data", cache_key)
         now = datetime.now(timezone.utc)
         if cached and now - cached.fetched_at < FOOTBALL_CACHE_TTL and isinstance(cached.payload, dict):

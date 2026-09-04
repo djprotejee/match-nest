@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.request import urlopen
+from .http_cache import cached_urlopen as urlopen
 
 from .base import EventProvider
 from ..models import Event, EventStatus, F1Session, Sport

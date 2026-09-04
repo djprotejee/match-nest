@@ -4,7 +4,8 @@ import json
 import os
 from datetime import datetime, timezone
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .http_cache import cached_urlopen as urlopen
 
 from .base import EventProvider
 from .football_data import football_entity_ids, football_importance

@@ -6,7 +6,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .http_cache import cached_urlopen as urlopen
 
 from .base import EventProvider
 from .football_data import (
@@ -32,7 +33,7 @@ class ApiFootballProvider(EventProvider):
         team_entities: dict[str, int] | None = None,
         base_url: str = "https://v3.football.api-sports.io",
     ) -> None:
-        self.token = token or os.getenv("API_FOOTBALL_TOKEN")
+        self.token = token if token is not None else os.getenv("API_FOOTBALL_TOKEN") if os.getenv("API_FOOTBALL_ENABLE", "0") == "1" else None
         self.team_queries = team_queries or {}
         self.team_entities = team_entities or api_football_team_entities()
         self.base_url = base_url.rstrip("/")

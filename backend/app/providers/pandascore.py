@@ -5,7 +5,8 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .http_cache import cached_urlopen as urlopen
 
 from .base import EventProvider
 from .grid import GRID_PROVIDER, grid_cs2_sections, grid_end_state_cache_key, grid_series_id_for_event
@@ -36,7 +37,7 @@ class PandaScoreCS2Provider(EventProvider):
         payload = dedupe_matches(
             [
                 item
-                for bucket in ["running", "upcoming", "past"]
+                for bucket in schedule_buckets(start, end)
                 for item in self._fetch_bucket(bucket, pages=pages_for_bucket(bucket, start, end), start=start, end=end)
             ]
         )
@@ -67,7 +68,7 @@ class PandaScoreCS2Provider(EventProvider):
             # It only becomes a stable historical snapshot if fetched after
             # that range ended and results had time to settle.
             stable_snapshot = cached_state is not None and end is not None and cached_state.fetched_at >= end.astimezone(timezone.utc) + timedelta(days=2)
-            if can_use_stable_pandascore_cache(bucket, end) and stable_snapshot and isinstance(cached_page, list) and cached_page:
+            if can_use_stable_pandascore_cache(bucket, end) and stable_snapshot and datetime.now(timezone.utc) - cached_state.fetched_at < timedelta(days=7) and isinstance(cached_page, list) and cached_page:
                 page_items = cached_page
             else:
                 page_items = self._fetch_bucket_page(bucket, query, cache_key)
@@ -139,7 +140,7 @@ class PandaScoreCS2Provider(EventProvider):
         if stored_event and stored_event.starts_at:
             start = stored_event.starts_at.astimezone(timezone.utc) - timedelta(hours=12)
             end = stored_event.starts_at.astimezone(timezone.utc) + timedelta(hours=36)
-            buckets = ["running", "upcoming", "past"]
+            buckets = schedule_buckets(start, end)
             for bucket in buckets:
                 for item in self._fetch_bucket(bucket, pages=pages_for_bucket(bucket, start, end), start=start, end=end):
                     if item.get("id") == match_id:
@@ -153,6 +154,15 @@ class PandaScoreCS2Provider(EventProvider):
                 if item.get("id") == match_id:
                     return item
         return None
+
+
+def schedule_buckets(start: datetime | None, end: datetime | None) -> list[str]:
+    now = datetime.now(timezone.utc)
+    if end is not None and end < now - timedelta(days=2):
+        return ["past"]
+    if start is not None and start > now + timedelta(days=1):
+        return ["upcoming"]
+    return ["running", "upcoming", "past"]
 
 
 def can_use_stable_pandascore_cache(bucket: str, end: datetime | None) -> bool:

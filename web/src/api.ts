@@ -1,6 +1,10 @@
+import { ReadCache } from "./requestCache";
 import type { AccountSettings, AuthResponse, AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, FollowLevel, MatchEvent, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport, TournamentDetail, TournamentSummary } from "./types";
 
 const DEFAULT_API_URL = import.meta.env.DEV ? `${window.location.origin}/api/` : `${window.location.origin}/`;
+const reads = new ReadCache();
+export function invalidateApiReads(): void { reads.clear(); }
+
 const AUTH_TOKEN_KEY = "matchnest.auth.token";
 
 export function apiBaseUrl(): string {
@@ -86,6 +90,7 @@ export async function updateEntity(
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.detail || `API request failed: ${response.status}`);
   }
+  invalidateApiReads();
   return response.json() as Promise<EntityItem>;
 }
 
@@ -98,6 +103,7 @@ export async function deleteEntity(entityId: string): Promise<{ ok: boolean; res
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.detail || `API request failed: ${response.status}`);
   }
+  invalidateApiReads();
   return response.json() as Promise<{ ok: boolean; result: string }>;
 }
 
@@ -138,6 +144,7 @@ export async function saveFollowLevel(entityId: string, level: FollowLevel): Pro
   if (!response.ok) {
     throw new Error(`API request failed: ${response.status}`);
   }
+  invalidateApiReads();
 }
 
 export function authToken(): string | null {
@@ -145,10 +152,12 @@ export function authToken(): string | null {
 }
 
 export function saveAuthToken(token: string): void {
+  invalidateApiReads();
   localStorage.setItem(AUTH_TOKEN_KEY, token);
 }
 
 export function clearAuthToken(): void {
+  invalidateApiReads();
   localStorage.removeItem(AUTH_TOKEN_KEY);
 }
 
@@ -200,6 +209,7 @@ export async function saveF1Sessions(sessions: string[]): Promise<void> {
     if (!response.ok) {
       throw new Error(`API request failed: ${response.status}`);
     }
+    invalidateApiReads();
   });
 }
 
@@ -227,6 +237,7 @@ export async function deleteNotificationRule(ruleId: string): Promise<void> {
   if (!response.ok) {
     throw new Error(`API request failed: ${response.status}`);
   }
+  invalidateApiReads();
 }
 
 export async function savePushSubscription(subscription: PushSubscription): Promise<void> {
@@ -239,12 +250,17 @@ function apiUrl(path: string): URL {
 }
 
 async function getJson<T>(url: URL, onRefreshState?: (refreshing: boolean) => void): Promise<T> {
-  const response = await fetch(url, { headers: authHeaders() });
-  if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
-  }
-  onRefreshState?.(response.headers.get("X-MatchNest-Refreshing") === "true");
-  return response.json() as Promise<T>;
+  const token = authToken() || "anonymous";
+  const ttl = url.pathname.endsWith("/entities") ? 300000
+    : url.pathname.includes("/auth/") || url.pathname.endsWith("/settings") ? 0
+    : url.pathname.includes("/timeline") || url.pathname.includes("/calendar/") ? 3000 : 30000;
+  const result = await reads.read(`${token}:${url}`, ttl, async () => {
+    const response = await fetch(url, { headers: authHeaders() });
+    if (!response.ok) throw new Error(`API request failed: ${response.status}`);
+    return { payload: await response.json() as T, refreshing: response.headers.get("X-MatchNest-Refreshing") === "true" };
+  });
+  onRefreshState?.(result.refreshing);
+  return result.payload;
 }
 
 async function postJson<T>(path: string, body: unknown, method = "POST"): Promise<T> {
@@ -257,6 +273,7 @@ async function postJson<T>(path: string, body: unknown, method = "POST"): Promis
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.detail || `API request failed: ${response.status}`);
   }
+  invalidateApiReads();
   return response.json() as Promise<T>;
 }
 

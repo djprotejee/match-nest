@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import threading
@@ -49,15 +50,9 @@ class ProviderResult:
 
 
 _CACHE_TTL = timedelta(minutes=1)
-PROVIDER_CACHE_SCHEMA_VERSION = "v4"
+PROVIDER_CACHE_SCHEMA_VERSION = "v5"
 _CACHE: dict[str, tuple[datetime, list[ProviderResult], list[Event]]] = {}
-try:
-    _PROVIDER_MAX_WORKERS = max(1, int(os.getenv("MATCHNEST_PROVIDER_MAX_WORKERS", "2").strip() or "2"))
-except ValueError:
-    _PROVIDER_MAX_WORKERS = 2
-# Give each upstream its own serial queue. A large CS2 history refresh must
-# not keep football fixtures waiting behind thousands of database writes.
-_PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=_PROVIDER_MAX_WORKERS)
+# Independent serial queues keep slow history imports from blocking other sports.
 _PROVIDER_EXECUTORS: dict[str, ThreadPoolExecutor] = {}
 
 
@@ -120,8 +115,8 @@ def provider_results(
     cached = _CACHE.get(cache_key)
     if cached:
         cached_at, cached_results, cached_events = cached
-        has_cached_error = any(result.error or result.refreshing for result in cached_results)
-        if not has_cached_error and datetime.now() - cached_at < _CACHE_TTL:
+        ttl = timedelta(seconds=2) if any(result.refreshing for result in cached_results) else timedelta(seconds=10) if any(result.error for result in cached_results) else _CACHE_TTL
+        if datetime.now() - cached_at < ttl:
             return cached_results, cached_events
 
     events: list[Event] = []
@@ -136,17 +131,18 @@ def provider_results(
             results.append(ProviderResult(name=name, configured=False, count=0))
             continue
         cached_count = len([event for event in db_events if provider_matches_event(name, event)])
-        if not provider_should_refresh(name, cache_key, start, end):
+        schedule_key = provider_schedule_key(provider, start, end)
+        if not provider_should_refresh(name, schedule_key, start, end):
             results.append(ProviderResult(name=name, configured=True, count=cached_count))
             continue
 
         if name == "F4CalendarProvider":
-            provider_events = refresh_provider(provider, name, cache_key, start, end)
+            provider_events = refresh_provider(provider, name, schedule_key, start, end)
             results.append(ProviderResult(name=name, configured=True, count=len(provider_events)))
             continue
 
-        refresh_key = f"{name}:{cache_key}"
-        refresh_provider_async(refresh_key, provider, name, cache_key, start, end)
+        refresh_key = f"{name}:{schedule_key}"
+        refresh_provider_async(refresh_key, provider, name, schedule_key, start, end)
         results.append(
             ProviderResult(
                 name=name,
@@ -173,6 +169,8 @@ def provider_results(
                 )
             )
 
+    if len(_CACHE) >= 64:
+        _CACHE.pop(next(iter(_CACHE), cache_key), None)
     _CACHE[cache_key] = (datetime.now(), results, events)
     return results, events
 
@@ -189,7 +187,7 @@ def refresh_provider_async(
         existing = _IN_FLIGHT_REFRESHES.get(refresh_key)
         if existing and not existing.done():
             return existing
-        future = provider_executor(provider_name).submit(refresh_provider, provider, provider_name, cache_key, start, end)
+        future = provider_executor(provider_name).submit(refresh_provider_if_needed, provider, provider_name, cache_key, start, end)
         _IN_FLIGHT_REFRESHES[refresh_key] = future
     # A completed future invokes its callback immediately. Register outside the
     # lock so a fast/empty provider cannot deadlock every subsequent refresh.
@@ -202,9 +200,9 @@ def refresh_is_running(start: datetime, end: datetime, preferences: UserPreferen
     cached = _CACHE.get(key)
     if cached and any(result.refreshing for result in cached[1]):
         return True
-    suffix = ":" + key
+    keys = {f"{type(provider).__name__}:{provider_schedule_key(provider, start, end)}" for provider in configured_providers(preferences)}
     with _IN_FLIGHT_LOCK:
-        return any(key.endswith(suffix) and not future.done() for key, future in _IN_FLIGHT_REFRESHES.items())
+        return any(key in keys and not future.done() for key, future in _IN_FLIGHT_REFRESHES.items())
 
 
 def clear_in_flight_refresh(refresh_key: str) -> None:
@@ -214,6 +212,13 @@ def clear_in_flight_refresh(refresh_key: str) -> None:
             _IN_FLIGHT_REFRESHES.pop(refresh_key, None)
 
 
+def refresh_provider_if_needed(provider, provider_name, cache_key, start, end):
+    # Another user/view may have completed this schedule while the job queued.
+    if not provider_should_refresh(provider_name, cache_key, start, end):
+        return []
+    return refresh_provider(provider, provider_name, cache_key, start, end)
+
+
 def refresh_provider(
     provider: EventProvider,
     provider_name: str,
@@ -221,6 +226,7 @@ def refresh_provider(
     start: datetime | None,
     end: datetime | None,
 ) -> list[Event]:
+    start, end = provider_date_range(start, end)
     try:
         provider_events = provider.fetch(start=start, end=end)
         upsert_events(provider_events)
@@ -230,17 +236,17 @@ def refresh_provider(
         if errors:
             logging.getLogger("matchnest").warning("Provider partial refresh: %s %s %s", provider_name, cache_key, "; ".join(errors))
         mark_provider_fetch(provider_name, cache_key, "error" if errors else "ok", "; ".join(errors) if errors else None)
-        _CACHE.pop(cache_key, None)
+        _CACHE.clear()
         return provider_events
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         mark_provider_fetch(provider_name, cache_key, "error", f"HTTP {exc.code}: {body}")
-        _CACHE.pop(cache_key, None)
+        _CACHE.clear()
         raise
     except Exception as exc:
         logging.getLogger("matchnest").warning("Provider refresh failed: %s %s %s", provider_name, cache_key, exc)
         mark_provider_fetch(provider_name, cache_key, "error", str(exc))
-        _CACHE.pop(cache_key, None)
+        _CACHE.clear()
         raise
 
 
@@ -261,7 +267,15 @@ def fetch_events(
     return events
 
 
+_DETAIL_LOCKS = [threading.Lock() for _ in range(32)]
+
+
 def fetch_event_details(event_id: str) -> dict | None:
+    with _DETAIL_LOCKS[hash(event_id) % len(_DETAIL_LOCKS)]:
+        return _fetch_event_details(event_id)
+
+
+def _fetch_event_details(event_id: str) -> dict | None:
     load_environment()
     event = get_event(event_id)
     cached_state = event_details_cache_state(event_id)
@@ -362,7 +376,9 @@ def detail_error_message(exc: Exception) -> str:
 
 def provider_is_configured(provider: EventProvider) -> bool:
     if isinstance(provider, FootballDataProvider):
-        return bool(provider.token)
+        return bool(provider.token and (provider.team_queries or provider.team_entities or provider.competition_entities))
+    if isinstance(provider, EspnFootballProvider):
+        return bool(provider.team_ids or provider.competition_entities)
     if isinstance(provider, ApiFootballProvider):
         return bool(provider.token)
     if isinstance(provider, TheSportsDBFootballProvider):
@@ -386,6 +402,8 @@ def provider_refresh_ttl(provider_name: str, start: datetime | None = None, end:
     # Minute cron jobs only need fresh data for live/recent windows. Broader
     # schedule windows stay cached so hosted databases and free APIs are not
     # burned by background maintenance.
+    if end is not None and end < datetime.now(timezone.utc) - timedelta(days=2):
+        return timedelta(days=7)
     if range_is_hot_window(start, end):
         if provider_name == "PandaScoreCS2Provider":
             return timedelta(minutes=2)
@@ -426,13 +444,40 @@ def provider_matches_event(provider_name: str, event: Event) -> bool:
     return event.source == sources.get(provider_name)
 
 
+def provider_date_range(start: datetime | None, end: datetime | None):
+    # Stable UTC day bounds share payload URLs between users and cron ticks.
+    # Expand, never truncate: response filtering still uses the original range.
+    if start is not None:
+        start = start.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    if end is not None:
+        utc_end = end.astimezone(timezone.utc)
+        end = utc_end.replace(hour=0, minute=0, second=0, microsecond=0)
+        if utc_end > end:
+            end += timedelta(days=1)
+    return start, end
+
+
+def provider_schedule_key(provider: EventProvider, start: datetime | None, end: datetime | None) -> str:
+    # Follows and spoiler settings belong to the response filter. Only inputs
+    # that change the upstream schedule belong in the shared refresh key.
+    start, end = provider_date_range(start, end)
+    inputs = {key: getattr(provider, key) for key in (
+        "team_ids", "team_entities", "team_queries", "competition_entities", "token", "api_key", "url", "base_url"
+    ) if hasattr(provider, key)}
+    serialized = json.dumps(inputs, sort_keys=True, default=lambda value: sorted(value))
+    signature = hashlib.sha256(serialized.encode()).hexdigest()[:24]
+    start_key = start.isoformat() if start else "default"
+    end_key = end.isoformat() if end else "default"
+    return f"schedule-v1:{start_key}:{end_key}:{signature}"
+
+
 def range_cache_key(start: datetime | None, end: datetime | None, preferences: UserPreferences | None = None) -> str:
-    start_key = start.date().isoformat() if start else "default"
-    end_key = end.date().isoformat() if end else "default"
+    start_key = start.isoformat() if start else "default"
+    end_key = end.isoformat() if end else "default"
     follow_key = "default"
     if preferences:
         followed = sorted(
-            f"{entity_id}:{follow_level_value(follow.level)}"
+            entity_id
             for entity_id, follow in preferences.follows.items()
             if is_active_follow_level(follow.level)
         )

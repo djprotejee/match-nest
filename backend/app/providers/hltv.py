@@ -6,7 +6,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .http_cache import cached_urlopen as urlopen
 
 from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
 

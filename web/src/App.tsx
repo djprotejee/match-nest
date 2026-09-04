@@ -16,6 +16,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   authToken,
+  invalidateApiReads,
   clearAuthToken,
   createCustomEntity,
   deleteEntity,
@@ -70,7 +71,7 @@ import {
   statusFromDate,
   visibleCalendarDays,
 } from "./dateUtils";
-import { fallbackEntities, fallbackTimeline } from "./demoData";
+import { refreshDelay } from "./requestCache";
 import { appendManualPins, filterGroups, findConflicts, flattenGroups, followLevelsForFeedMode, mergeFollowOverrides } from "./eventFilters";
 import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, EventStatus, FollowLevel, MatchEvent, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport, TournamentDetail, TournamentSummary } from "./types";
 
@@ -90,9 +91,9 @@ export function App() {
   const [sports, setSports] = useState<Set<Sport>>(new Set(SPORTS));
   const [state, setState] = useState<AppState>(loadAppState);
   const [monthCursor, setMonthCursor] = useState(() => new Date());
-  const [timeline, setTimeline] = useState<DayGroup[]>(() => loadInitialTimelineCache(state)?.timeline || []);
-  const [calendarGroups, setCalendarGroups] = useState<DayGroup[]>(() => loadInitialCalendarCache(state) || []);
-  const [entities, setEntities] = useState<EntityItem[]>(() => loadInitialTimelineCache(state)?.entities || []);
+  const [timeline, setTimeline] = useState<DayGroup[]>([]);
+  const [calendarGroups, setCalendarGroups] = useState<DayGroup[]>([]);
+  const [entities, setEntities] = useState<EntityItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [offline, setOffline] = useState(false);
   const [cacheNote, setCacheNote] = useState<string | null>(null);
@@ -101,6 +102,11 @@ export function App() {
   const [authLoading, setAuthLoading] = useState(Boolean(authToken()));
   const [authError, setAuthError] = useState<string | null>(null);
   const [accountSettingsLoaded, setAccountSettingsLoaded] = useState(false);
+  const timelineRequest = useRef(0);
+  const calendarRequest = useRef(0);
+  const entitiesRef = useRef<EntityItem[]>([]);
+  const savedSettings = useRef<string | null>(null);
+  const feedLevelsKey = followLevelsForFeedMode(feedMode, state.customFeedLevels).join(",");
   const timelineRetryRef = useRef<number | null>(null);
   const calendarRetryRef = useRef<number | null>(null);
   const timelineRetryCountsRef = useRef<Record<string, number>>({});
@@ -139,9 +145,12 @@ export function App() {
       setAccountSettingsLoaded(false);
       return;
     }
+    let cancelled = false;
+    savedSettings.current = null;
     setAccountSettingsLoaded(false);
     fetchAccountSettings()
       .then((settings) => {
+        if (cancelled) return;
         setState((current) => mergeAccountSettings(current, settings));
         syncViewSettings(settings.ui_state);
         setLastError(null);
@@ -149,130 +158,155 @@ export function App() {
       .catch((error) => {
         setLastError(readErrorMessage(error));
       })
-      .finally(() => setAccountSettingsLoaded(true));
+      .finally(() => { if (!cancelled) setAccountSettingsLoaded(true); });
+    return () => { cancelled = true; };
   }, [currentUser?.id]);
 
   useEffect(() => {
     if (!currentUser || !accountSettingsLoaded) {
       return;
     }
+    const payload = accountSettingsPayload(state, {
+      range, feedMode, importanceMode, sports: Array.from(sports),
+      timelineStatuses: Array.from(timelineStatuses), calendarStatuses: Array.from(calendarStatuses),
+      statusDefaultsVersion: STATUS_DEFAULTS_VERSION,
+    });
+    const serialized = JSON.stringify(payload);
+    if (serialized === savedSettings.current) return;
     const timeout = window.setTimeout(() => {
-      void saveAccountSettings(accountSettingsPayload(state, {
-        range,
-        feedMode,
-        importanceMode,
-        sports: Array.from(sports),
-        timelineStatuses: Array.from(timelineStatuses),
-        calendarStatuses: Array.from(calendarStatuses),
-        statusDefaultsVersion: STATUS_DEFAULTS_VERSION,
-      })).catch((error) => {
+      const previous = savedSettings.current;
+      savedSettings.current = serialized;
+      void saveAccountSettings(payload).catch((error) => {
+        if (savedSettings.current === serialized) savedSettings.current = previous;
         setLastError(readErrorMessage(error));
       });
-    }, 700);
+    }, 1000);
     return () => window.clearTimeout(timeout);
   }, [state, range, feedMode, importanceMode, sports, timelineStatuses, calendarStatuses, currentUser, accountSettingsLoaded]);
 
   useEffect(() => {
-    if (currentUser && accountSettingsLoaded) {
-      void loadTimeline();
-    }
-  }, [range, feedMode, state.hideSpoilers, state.spoilerMode, state.spoilerSports, state.spoilerLevels, state.spoilerEntities, state.customFeedLevels, currentUser, accountSettingsLoaded]);
+    if (currentUser && accountSettingsLoaded) void loadEntitiesOnly();
+  }, [currentUser?.id, accountSettingsLoaded]);
 
   useEffect(() => {
-    if (currentUser && accountSettingsLoaded) {
-      void loadCalendar();
-    }
-  }, [monthCursor, feedMode, state.hideSpoilers, state.spoilerMode, state.spoilerSports, state.spoilerLevels, state.spoilerEntities, state.customFeedLevels, currentUser, accountSettingsLoaded]);
+    timelineRetryCountsRef.current = {};
+    if (tab === "timeline" && currentUser && accountSettingsLoaded) void loadTimeline();
+    return () => {
+      timelineRequest.current += 1;
+      if (timelineRetryRef.current !== null) window.clearTimeout(timelineRetryRef.current);
+      timelineRetryRef.current = null;
+    };
+  }, [tab, range, feedLevelsKey, state.hideSpoilers, currentUser?.id, accountSettingsLoaded]);
 
-  async function loadTimeline() {
-    const cacheKey = timelineCacheKey(range, state, feedMode, state.customFeedLevels);
-    const cached = loadCachedData(cacheKey) || loadLatestTimelineCache(range);
-    if (cached && timeline.length === 0) {
-      setTimeline(cached.timeline);
-      setEntities(cached.entities);
-      setCacheNote(`Cached ${formatRelativeTime(cached.at)}`);
+  useEffect(() => {
+    calendarRetryCountsRef.current = {};
+    if (tab === "calendar" && currentUser && accountSettingsLoaded) void loadCalendar();
+    return () => {
+      calendarRequest.current += 1;
+      if (calendarRetryRef.current !== null) window.clearTimeout(calendarRetryRef.current);
+      calendarRetryRef.current = null;
+    };
+  }, [tab, monthCursor, feedLevelsKey, state.hideSpoilers, currentUser?.id, accountSettingsLoaded]);
+
+  useEffect(() => {
+    const resume = () => {
+      if (document.visibilityState === "visible" && currentUser && accountSettingsLoaded) {
+        if (tab === "timeline") void loadTimeline(true);
+        if (tab === "calendar") void loadCalendar(true);
+      }
+    };
+    document.addEventListener("visibilitychange", resume);
+    return () => document.removeEventListener("visibilitychange", resume);
+  }, [tab, range, monthCursor, feedLevelsKey, state.hideSpoilers, currentUser?.id, accountSettingsLoaded]);
+
+  async function loadTimeline(quiet = false) {
+    if (!currentUser) return;
+    const request = ++timelineRequest.current;
+    if (timelineRetryRef.current !== null) window.clearTimeout(timelineRetryRef.current);
+    timelineRetryRef.current = null;
+    const cacheKey = `matchnest.account.${currentUser.id}.${timelineCacheKey(range, state, feedMode, state.customFeedLevels)}`;
+    const cached = loadCachedData(cacheKey);
+    if (!quiet) {
+      if (cached) setTimeline(cached.timeline);
+      setLoading(!cached && timeline.length === 0);
     }
-    setLoading(true);
     try {
       let refreshing = false;
-      const [nextTimeline, nextEntities] = await Promise.all([
-        fetchTimeline(range, !state.hideSpoilers, followLevelsForFeedMode(feedMode, state.customFeedLevels), (value) => { refreshing = value; }),
-        fetchEntities(),
-      ]);
-      if (nextTimeline.length) {
+      const nextTimeline = await fetchTimeline(range, !state.hideSpoilers, followLevelsForFeedMode(feedMode, state.customFeedLevels), (value) => { refreshing = value; });
+      if (request !== timelineRequest.current) return;
+      if (nextTimeline.length || !refreshing) {
         setTimeline(nextTimeline);
-      } else if (!cached && timeline.length === 0) {
-        setTimeline([]);
+        localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: entitiesRef.current }));
       }
-      setEntities(nextEntities);
-      syncFollowsFromEntities(nextEntities);
       setOffline(false);
-      setCacheNote(nextTimeline.length ? null : cached ? `Cached ${formatRelativeTime(cached.at)}. Refreshing...` : "Refreshing events...");
+      setCacheNote(refreshing ? "Updating events in the background…" : null);
       setLastError(null);
-      if (nextTimeline.length) {
-        localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
-        if (!refreshing) timelineRetryCountsRef.current[cacheKey] = 0;
-      }
-      if (refreshing || !nextTimeline.length) {
-        scheduleTimelineRetry();
-      }
+      if (refreshing) scheduleTimelineRetry();
+      else timelineRetryCountsRef.current[cacheKey] = 0;
     } catch (error) {
+      if (request !== timelineRequest.current) return;
       setLastError(readErrorMessage(error));
-      if (cached) {
-        setTimeline(cached.timeline);
-        setEntities(cached.entities);
-        setCacheNote(`Cached ${formatRelativeTime(cached.at)}`);
-      } else if (timeline.length === 0) {
-        setTimeline(fallbackTimeline);
-        setEntities(fallbackEntities);
-        setCacheNote("Local preview data");
-      }
+      setCacheNote(cached ? `Cached ${formatRelativeTime(cached.at)}` : null);
       setOffline(true);
     } finally {
-      setLoading(false);
+      if (request === timelineRequest.current) setLoading(false);
     }
   }
 
-  async function loadCalendar() {
+  async function loadCalendar(quiet = false) {
+    if (!currentUser) return;
+    const request = ++calendarRequest.current;
+    if (calendarRetryRef.current !== null) window.clearTimeout(calendarRetryRef.current);
+    calendarRetryRef.current = null;
     const year = monthCursor.getFullYear();
     const month = monthCursor.getMonth() + 1;
     const levels = followLevelsForFeedMode(feedMode, state.customFeedLevels);
-    const cacheKey = calendarCacheKey(year, month, levels);
-    const cached = loadCachedCalendar(cacheKey) || loadLatestCalendarCache(year, month);
-    if (cached) {
-      setCalendarGroups(cached);
-    }
+    const cacheKey = `matchnest.account.${currentUser.id}.${calendarCacheKey(year, month, levels)}.${state.hideSpoilers}`;
+    const cached = loadCachedCalendar(cacheKey);
+    if (!quiet) setCalendarGroups(cached || []);
     try {
       let refreshing = false;
       const nextGroups = await fetchCalendar(year, month, !state.hideSpoilers, levels, (value) => { refreshing = value; });
-      if (nextGroups.length) {
+      if (request !== calendarRequest.current) return;
+      if (nextGroups.length || !refreshing) {
         setCalendarGroups(nextGroups);
-      } else if (!cached && calendarGroups.length === 0) {
-        setCalendarGroups([]);
-      }
-      if (nextGroups.length) {
         localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), groups: nextGroups }));
-        if (!refreshing) calendarRetryCountsRef.current[cacheKey] = 0;
       }
-      if (refreshing || !nextGroups.length) {
-        scheduleCalendarRetry();
-      }
-    } catch {
-      if (!cached && calendarGroups.length === 0) {
-        setCalendarGroups(fallbackTimeline);
-      }
+      setOffline(false);
+      setLastError(null);
+      if (refreshing) scheduleCalendarRetry();
+      else calendarRetryCountsRef.current[cacheKey] = 0;
+    } catch (error) {
+      if (request !== calendarRequest.current) return;
+      setLastError(readErrorMessage(error));
+      setOffline(true);
     }
   }
 
   async function loadEntitiesOnly() {
+    const token = authToken();
     try {
       const nextEntities = await fetchEntities();
+      if (token !== authToken()) return;
+      entitiesRef.current = nextEntities;
       setEntities(nextEntities);
       syncFollowsFromEntities(nextEntities);
-      setLastError(null);
     } catch (error) {
       setLastError(readErrorMessage(error));
     }
+  }
+
+  function refreshVisible() {
+    invalidateApiReads();
+    if (tab === "calendar") {
+      calendarRetryCountsRef.current = {};
+      return loadCalendar(true);
+    }
+    if (tab === "timeline") {
+      timelineRetryCountsRef.current = {};
+      return loadTimeline(true);
+    }
+    return loadEntitiesOnly();
   }
 
   const allEntities = useMemo(() => mergeFollowOverrides(entities, state.follows), [entities, state.follows]);
@@ -345,39 +379,39 @@ export function App() {
 
   function syncFollowsFromEntities(nextEntities: EntityItem[]) {
     const follows = followsFromEntities(nextEntities);
-    setState((current) => ({ ...current, follows }));
+    setState((current) => JSON.stringify(current.follows) === JSON.stringify(follows) ? current : { ...current, follows });
   }
 
   function scheduleTimelineRetry() {
-    const retryKey = timelineCacheKey(range, state, feedMode, state.customFeedLevels);
+    const retryKey = `matchnest.account.${currentUser?.id}.${timelineCacheKey(range, state, feedMode, state.customFeedLevels)}`;
     const count = timelineRetryCountsRef.current[retryKey] || 0;
-    if (timelineRetryRef.current !== null || count >= 6) {
+    if (timelineRetryRef.current !== null || refreshDelay(count) === null) {
       return;
     }
     timelineRetryCountsRef.current[retryKey] = count + 1;
     timelineRetryRef.current = window.setTimeout(() => {
       timelineRetryRef.current = null;
-      void loadTimeline();
-    }, count < 2 ? 3500 : 8000);
+      if (document.visibilityState === "visible") void loadTimeline(true);
+    }, refreshDelay(count)!);
   }
 
   function scheduleCalendarRetry() {
-    const retryKey = calendarCacheKey(monthCursor.getFullYear(), monthCursor.getMonth() + 1, followLevelsForFeedMode(feedMode, state.customFeedLevels));
+    const retryKey = `matchnest.account.${currentUser?.id}.${calendarCacheKey(monthCursor.getFullYear(), monthCursor.getMonth() + 1, followLevelsForFeedMode(feedMode, state.customFeedLevels))}.${state.hideSpoilers}`;
     const count = calendarRetryCountsRef.current[retryKey] || 0;
-    if (calendarRetryRef.current !== null || count >= 6) {
+    if (calendarRetryRef.current !== null || refreshDelay(count) === null) {
       return;
     }
     calendarRetryCountsRef.current[retryKey] = count + 1;
     calendarRetryRef.current = window.setTimeout(() => {
       calendarRetryRef.current = null;
-      void loadCalendar();
-    }, count < 2 ? 3500 : 8000);
+      if (document.visibilityState === "visible") void loadCalendar(true);
+    }, refreshDelay(count)!);
   }
 
   function setFollow(entityId: string, level: FollowLevel) {
     updateState({ follows: { ...state.follows, [entityId]: level } });
     void saveFollowLevel(entityId, level)
-      .then(() => Promise.all([loadTimeline(), loadCalendar()]))
+      .then(() => refreshVisible())
       .catch((error) => {
         setOffline(true);
         setLastError(readErrorMessage(error));
@@ -450,7 +484,7 @@ export function App() {
     const f1Sessions = { ...state.f1Sessions, [session]: enabled };
     updateState({ f1Sessions });
     void saveF1Sessions(Object.entries(f1Sessions).filter(([, value]) => value).map(([key]) => key))
-      .then(() => Promise.all([loadTimeline(), loadCalendar()]))
+      .then(() => refreshVisible())
       .catch((error) => {
         setOffline(true);
         setLastError(readErrorMessage(error));
@@ -528,7 +562,7 @@ export function App() {
           <p className="eyebrow">Personal watch hub</p>
           <h1>MatchNest</h1>
         </div>
-        <button className="icon-button" type="button" onClick={() => void loadTimeline()} aria-label="Refresh">
+        <button className="icon-button" type="button" onClick={() => void refreshVisible()} aria-label="Refresh">
           <RefreshCcw size={20} />
         </button>
       </header>
@@ -2640,16 +2674,6 @@ function NavButton(props: { icon: React.ReactNode; label: string; active: boolea
   );
 }
 
-function loadInitialTimelineCache(state: AppState): { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null {
-  return loadCachedData(timelineCacheKey("week", state, "main", state.customFeedLevels)) || loadLatestTimelineCache("week");
-}
-
-function loadInitialCalendarCache(state: AppState): DayGroup[] | null {
-  const now = new Date();
-  const levels = followLevelsForFeedMode("main", state.customFeedLevels);
-  return loadCachedCalendar(calendarCacheKey(now.getFullYear(), now.getMonth() + 1, levels)) || loadLatestCalendarCache(now.getFullYear(), now.getMonth() + 1);
-}
-
 function loadCachedData(cacheKey: string): { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null {
   const stored = localStorage.getItem(cacheKey);
   if (!stored) {
@@ -2660,21 +2684,6 @@ function loadCachedData(cacheKey: string): { at: number; timeline: DayGroup[]; e
   } catch {
     return null;
   }
-}
-
-function loadLatestTimelineCache(range: RangeFilter): { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null {
-  const prefix = `${CACHE_PREFIX}${range}.`;
-  let latest: { at: number; timeline: DayGroup[]; entities: EntityItem[] } | null = null;
-  for (const key of Object.keys(localStorage)) {
-    if (!key.startsWith(prefix)) {
-      continue;
-    }
-    const cached = loadCachedData(key);
-    if (cached && (!latest || cached.at > latest.at)) {
-      latest = cached;
-    }
-  }
-  return latest;
 }
 
 function timelineCacheKey(range: RangeFilter, state: AppState, feedMode: FeedMode, customFeedLevels: FollowLevel[]): string {
@@ -2812,30 +2821,6 @@ function loadCachedCalendar(key: string): DayGroup[] | null {
   }
 }
 
-function loadLatestCalendarCache(year: number, month: number): DayGroup[] | null {
-  const prefix = `${CALENDAR_CACHE_PREFIX}${year}-${String(month).padStart(2, "0")}.`;
-  let latestAt = 0;
-  let latestGroups: DayGroup[] | null = null;
-  for (const key of Object.keys(localStorage)) {
-    if (!key.startsWith(prefix)) {
-      continue;
-    }
-    const stored = localStorage.getItem(key);
-    if (!stored) {
-      continue;
-    }
-    try {
-      const payload = JSON.parse(stored) as { at?: number; groups?: DayGroup[] };
-      if (payload.groups && (payload.at || 0) >= latestAt) {
-        latestAt = payload.at || 0;
-        latestGroups = payload.groups;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return latestGroups;
-}
 
 function readErrorMessage(error: unknown): string {
   if (error instanceof Error) {

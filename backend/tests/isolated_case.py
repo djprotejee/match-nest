@@ -16,6 +16,9 @@ class IsolatedTestCase(TestCase):
         db = patch("app.storage.DB_PATH", Path(temp.name) / "test.sqlite")
         db.start()
         self.addCleanup(db.stop)
+        from app.providers.http_cache import clear_http_memory
+        clear_http_memory()
+        self.addCleanup(clear_http_memory)
         import app.providers.api_football as api
         import app.providers.football_data as football
         import app.providers.registry as registry

@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 from urllib.parse import urlencode
-from urllib.request import Request as UrlRequest, urlopen
+from urllib.request import Request as UrlRequest
+from .providers.http_cache import cached_urlopen as urlopen
 
 from .models import EntityBinding, EntityKind, Sport, UserPreferences
 from .storage import list_entity_records
@@ -83,7 +84,7 @@ def provider_search_candidates(query: str) -> list[dict]:
 
 def api_football_candidates(query: str) -> list[dict]:
     token = os.getenv("API_FOOTBALL_TOKEN", "").strip()
-    if not token:
+    if not token or os.getenv("API_FOOTBALL_ENABLE", "0") != "1":
         return []
     try:
         request = UrlRequest(

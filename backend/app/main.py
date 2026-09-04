@@ -22,7 +22,7 @@ from .emailer import send_verification_email
 from .entity_service import default_entity_color, entity_bindings_from_payload, entity_payload, provider_search_candidates
 from .models import EntityKind, Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserAccount
 from .notifications import dispatch_due_notifications, notification_settings_payload, push_config, rule_payload
-from .providers.registry import fetch_event_details, fetch_events, provider_results, refresh_is_running, configured_providers, provider_is_configured, provider_matches_event, range_cache_key
+from .providers.registry import fetch_event_details, fetch_events, provider_results, refresh_is_running, configured_providers, provider_is_configured, provider_matches_event, provider_schedule_key, provider_date_range
 from .service import (
     effective_event_status,
     filter_events,
@@ -308,8 +308,8 @@ def hot_refresh_ranges(now: datetime) -> list[tuple[datetime, datetime]]:
     events current while provider TTLs decide which upstream APIs are due.
     """
     return [
-        (now - timedelta(hours=6), now + timedelta(hours=18)),
-        (now, now + timedelta(days=8)),
+        provider_date_range(now - timedelta(hours=6), now + timedelta(hours=18)),
+        provider_date_range(now, now + timedelta(days=8)),
     ]
 
 
@@ -426,6 +426,12 @@ def runtime_health() -> dict:
     }
 
 
+@app.get("/health/providers")
+def provider_http_health() -> dict:
+    from .providers.http_cache import http_cache_stats
+    return {"scope": "current_process", "requests": http_cache_stats()}
+
+
 @app.get("/sources")
 def sources(
     year: int | None = None,
@@ -437,11 +443,10 @@ def sources(
         raise HTTPException(status_code=400, detail="Provide a valid year and month together.")
     start, end = month_range(year, month) if year is not None else (None, None)
     events = list_events(start, end)
-    key = range_cache_key(start, end, preferences)
     output = []
     for provider in configured_providers(preferences):
         name = type(provider).__name__
-        state = provider_fetch_state(name, key)
+        state = provider_fetch_state(name, provider_schedule_key(provider, start, end))
         output.append({
             "name": name,
             "configured": provider_is_configured(provider),

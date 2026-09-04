@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from calendar import monthrange
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request
+from .http_cache import cached_urlopen as urlopen
 
 from .base import EventProvider
 from .football_data import football_entity_ids, football_importance
@@ -154,6 +155,7 @@ class EspnFootballProvider(EventProvider):
 
 
 def month_keys(start: datetime, end: datetime) -> list[str]:
+    end = max(start, end - timedelta(microseconds=1))
     output: list[str] = []
     year = start.year
     month = start.month

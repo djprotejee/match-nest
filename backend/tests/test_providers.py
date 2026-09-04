@@ -597,7 +597,7 @@ class ProviderMappingTests(IsolatedTestCase):
     def test_espn_month_keys_cover_range(self) -> None:
         self.assertEqual(
             month_keys(datetime(2026, 9, 25, tzinfo=timezone.utc), datetime(2026, 11, 1, tzinfo=timezone.utc)),
-            ["202609", "202610", "202611"],
+            ["202609", "202610"],
         )
 
     def test_registry_dedupes_same_football_event_across_sources(self) -> None:
