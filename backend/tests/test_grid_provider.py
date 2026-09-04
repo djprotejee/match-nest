@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from isolated_case import IsolatedTestCase
 from datetime import datetime, timedelta, timezone
 
 from app.providers.pandascore import can_use_stable_pandascore_cache
 from app.providers.grid import grid_payload_stat_sections, parse_grid_series_ids
 
 
-class ProviderCacheTests(unittest.TestCase):
+class ProviderCacheTests(IsolatedTestCase):
     def test_parse_grid_series_ids_accepts_colon_and_equals(self) -> None:
         self.assertEqual(
             parse_grid_series_ids("cs2-101:2589176, cs2-202=2589177, broken"),

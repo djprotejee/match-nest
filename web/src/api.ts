@@ -25,19 +25,20 @@ export async function fetchTimeline(
   range: RangeFilter,
   revealSpoilers: boolean,
   levels: FollowLevel[] = ["main", "starred"],
+  onRefreshState?: (refreshing: boolean) => void,
 ): Promise<DayGroup[]> {
   const url = apiUrl("timeline");
   url.searchParams.set("range", range);
   url.searchParams.set("level", levels.join(","));
   url.searchParams.set("reveal_spoilers", revealSpoilers ? "true" : "false");
-  return getJson<DayGroup[]>(url);
+  return getJson<DayGroup[]>(url, onRefreshState);
 }
 
-export async function fetchCalendar(year: number, month: number, revealSpoilers: boolean, levels: FollowLevel[] = ["main", "starred"]): Promise<DayGroup[]> {
+export async function fetchCalendar(year: number, month: number, revealSpoilers: boolean, levels: FollowLevel[] = ["main", "starred"], onRefreshState?: (refreshing: boolean) => void): Promise<DayGroup[]> {
   const url = apiUrl(`calendar/${year}/${month}`);
   url.searchParams.set("level", levels.join(","));
   url.searchParams.set("reveal_spoilers", revealSpoilers ? "true" : "false");
-  return getJson<DayGroup[]>(url);
+  return getJson<DayGroup[]>(url, onRefreshState);
 }
 
 export async function fetchEntities(): Promise<EntityItem[]> {
@@ -237,11 +238,12 @@ function apiUrl(path: string): URL {
   return new URL(path.replace(/^\//, ""), normalizeApiBaseUrl(apiBaseUrl()));
 }
 
-async function getJson<T>(url: URL): Promise<T> {
+async function getJson<T>(url: URL, onRefreshState?: (refreshing: boolean) => void): Promise<T> {
   const response = await fetch(url, { headers: authHeaders() });
   if (!response.ok) {
     throw new Error(`API request failed: ${response.status}`);
   }
+  onRefreshState?.(response.headers.get("X-MatchNest-Refreshing") === "true");
   return response.json() as Promise<T>;
 }
 

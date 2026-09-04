@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from isolated_case import IsolatedTestCase
 import os
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -17,8 +18,9 @@ from app.main import (
 )
 
 
-class ServiceTests(unittest.TestCase):
+class ServiceTests(IsolatedTestCase):
     def setUp(self) -> None:
+        super().setUp()
         self.now = datetime(2026, 6, 10, 18, 0, tzinfo=KYIV_TZ)
         self.events = demo_events(self.now)
 

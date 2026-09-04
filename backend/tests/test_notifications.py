@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import unittest
+from isolated_case import IsolatedTestCase
 from datetime import datetime, timezone
 
 from app.models import Event, EventStatus, NotificationRule, Sport
 from app.notifications import notification_payload
 
 
-class NotificationTests(unittest.TestCase):
+class NotificationTests(IsolatedTestCase):
     def test_notification_payload_does_not_include_live_score(self) -> None:
         now = datetime(2026, 6, 13, 12, 0, tzinfo=timezone.utc)
         rule = NotificationRule(

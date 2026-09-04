@@ -44,10 +44,11 @@ class ProviderResult:
     configured: bool
     count: int
     error: str | None = None
+    refreshing: bool = False
 
 
 _CACHE_TTL = timedelta(minutes=1)
-PROVIDER_CACHE_SCHEMA_VERSION = "v3"
+PROVIDER_CACHE_SCHEMA_VERSION = "v4"
 _CACHE: dict[str, tuple[datetime, list[ProviderResult], list[Event]]] = {}
 try:
     _PROVIDER_MAX_WORKERS = max(1, int(os.getenv("MATCHNEST_PROVIDER_MAX_WORKERS", "2").strip() or "2"))
@@ -108,7 +109,7 @@ def provider_results(
     cached = _CACHE.get(cache_key)
     if cached:
         cached_at, cached_results, cached_events = cached
-        has_cached_error = any(result.error for result in cached_results)
+        has_cached_error = any(result.error or result.refreshing for result in cached_results)
         if not has_cached_error and datetime.now() - cached_at < _CACHE_TTL:
             return cached_results, cached_events
 
@@ -124,9 +125,6 @@ def provider_results(
             results.append(ProviderResult(name=name, configured=False, count=0))
             continue
         cached_count = len([event for event in db_events if provider_matches_event(name, event)])
-        if name != "PandaScoreCS2Provider" and end is not None and end.astimezone(timezone.utc) <= now and cached_count:
-            results.append(ProviderResult(name=name, configured=True, count=cached_count))
-            continue
         if not provider_should_refresh(name, cache_key, start, end):
             results.append(ProviderResult(name=name, configured=True, count=cached_count))
             continue
@@ -143,6 +141,7 @@ def provider_results(
                 name=name,
                 configured=True,
                 count=cached_count,
+                refreshing=True,
                 error=None if cached_count else "Refresh is running in the background.",
             )
         )
@@ -181,8 +180,20 @@ def refresh_provider_async(
             return existing
         future = _PROVIDER_EXECUTOR.submit(refresh_provider, provider, provider_name, cache_key, start, end)
         _IN_FLIGHT_REFRESHES[refresh_key] = future
-        future.add_done_callback(lambda _: clear_in_flight_refresh(refresh_key))
-        return future
+    # A completed future invokes its callback immediately. Register outside the
+    # lock so a fast/empty provider cannot deadlock every subsequent refresh.
+    future.add_done_callback(lambda _: clear_in_flight_refresh(refresh_key))
+    return future
+
+
+def refresh_is_running(start: datetime, end: datetime, preferences: UserPreferences) -> bool:
+    key = range_cache_key(start, end, preferences)
+    cached = _CACHE.get(key)
+    if cached and any(result.refreshing for result in cached[1]):
+        return True
+    suffix = ":" + key
+    with _IN_FLIGHT_LOCK:
+        return any(key.endswith(suffix) and not future.done() for key, future in _IN_FLIGHT_REFRESHES.items())
 
 
 def clear_in_flight_refresh(refresh_key: str) -> None:
@@ -204,7 +215,8 @@ def refresh_provider(
         upsert_events(provider_events)
         if provider_allows_stale_event_deletion(provider_name):
             delete_stale_events_for_source(provider.source, start, end, [event.id for event in provider_events])
-        mark_provider_fetch(provider_name, cache_key, "ok")
+        errors = getattr(provider, "refresh_errors", [])
+        mark_provider_fetch(provider_name, cache_key, "error" if errors else "ok", "; ".join(errors) if errors else None)
         _CACHE.pop(cache_key, None)
         return provider_events
     except HTTPError as exc:

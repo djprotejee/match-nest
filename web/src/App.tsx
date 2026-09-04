@@ -76,8 +76,9 @@ import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, 
 
 type Tab = "timeline" | "calendar" | "tournament" | "explore" | "settings";
 
-const STATUS_DEFAULTS_VERSION = 5;
+const STATUS_DEFAULTS_VERSION = 6;
 const DEFAULT_VISIBLE_STATUSES: EventStatus[] = ["live", "delayed", "upcoming"];
+const DEFAULT_CALENDAR_STATUSES: EventStatus[] = ["past", "live", "delayed", "upcoming", "tbd"];
 
 export function App() {
   const [tab, setTab] = useState<Tab>("timeline");
@@ -85,7 +86,7 @@ export function App() {
   const [feedMode, setFeedMode] = useState<FeedMode>("main");
   const [importanceMode, setImportanceMode] = useState<ImportanceMode>("all");
   const [timelineStatuses, setTimelineStatuses] = useState<Set<EventStatus>>(new Set(DEFAULT_VISIBLE_STATUSES));
-  const [calendarStatuses, setCalendarStatuses] = useState<Set<EventStatus>>(new Set(DEFAULT_VISIBLE_STATUSES));
+  const [calendarStatuses, setCalendarStatuses] = useState<Set<EventStatus>>(new Set(DEFAULT_CALENDAR_STATUSES));
   const [sports, setSports] = useState<Set<Sport>>(new Set(SPORTS));
   const [state, setState] = useState<AppState>(loadAppState);
   const [monthCursor, setMonthCursor] = useState(() => new Date());
@@ -193,8 +194,9 @@ export function App() {
     }
     setLoading(true);
     try {
+      let refreshing = false;
       const [nextTimeline, nextEntities] = await Promise.all([
-        fetchTimeline(range, !state.hideSpoilers, followLevelsForFeedMode(feedMode, state.customFeedLevels)),
+        fetchTimeline(range, !state.hideSpoilers, followLevelsForFeedMode(feedMode, state.customFeedLevels), (value) => { refreshing = value; }),
         fetchEntities(),
       ]);
       if (nextTimeline.length) {
@@ -209,9 +211,9 @@ export function App() {
       setLastError(null);
       if (nextTimeline.length) {
         localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), timeline: nextTimeline, entities: nextEntities }));
-        timelineRetryCountsRef.current[cacheKey] = 0;
+        if (!refreshing) timelineRetryCountsRef.current[cacheKey] = 0;
       }
-      if (!nextTimeline.length) {
+      if (refreshing || !nextTimeline.length) {
         scheduleTimelineRetry();
       }
     } catch (error) {
@@ -241,7 +243,8 @@ export function App() {
       setCalendarGroups(cached);
     }
     try {
-      const nextGroups = await fetchCalendar(year, month, !state.hideSpoilers, levels);
+      let refreshing = false;
+      const nextGroups = await fetchCalendar(year, month, !state.hideSpoilers, levels, (value) => { refreshing = value; });
       if (nextGroups.length) {
         setCalendarGroups(nextGroups);
       } else if (!cached && calendarGroups.length === 0) {
@@ -249,9 +252,9 @@ export function App() {
       }
       if (nextGroups.length) {
         localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), groups: nextGroups }));
-        calendarRetryCountsRef.current[cacheKey] = 0;
+        if (!refreshing) calendarRetryCountsRef.current[cacheKey] = 0;
       }
-      if (!nextGroups.length) {
+      if (refreshing || !nextGroups.length) {
         scheduleCalendarRetry();
       }
     } catch {
@@ -333,7 +336,7 @@ export function App() {
       setTimelineStatuses(new Set(normalizeStoredStatuses(uiState.timelineStatuses, shouldMigrateStatusDefaults)));
     }
     if (Array.isArray(uiState.calendarStatuses)) {
-      setCalendarStatuses(new Set(normalizeStoredStatuses(uiState.calendarStatuses, shouldMigrateStatusDefaults)));
+      setCalendarStatuses(new Set(normalizeStoredStatuses(uiState.calendarStatuses, shouldMigrateStatusDefaults, true)));
     }
     if (Array.isArray(uiState.customFeedLevels)) {
       updateState({ customFeedLevels: uiState.customFeedLevels.filter((value): value is FollowLevel => typeof value === "string") });
@@ -2790,10 +2793,10 @@ function isEventStatus(value: unknown): value is EventStatus {
   return value === "past" || value === "live" || value === "delayed" || value === "upcoming" || value === "tbd";
 }
 
-function normalizeStoredStatuses(values: unknown[], shouldMigrateStatusDefaults: boolean): EventStatus[] {
+function normalizeStoredStatuses(values: unknown[], shouldMigrateStatusDefaults: boolean, calendar = false): EventStatus[] {
   const statuses = values.filter(isEventStatus);
-  const migrated = shouldMigrateStatusDefaults ? statuses.filter((status) => status !== "past") : statuses;
-  return migrated.length ? migrated : DEFAULT_VISIBLE_STATUSES;
+  const migrated = calendar && shouldMigrateStatusDefaults ? Array.from(new Set<EventStatus>([...statuses, "past"])) : statuses;
+  return migrated.length ? migrated : calendar ? DEFAULT_CALENDAR_STATUSES : DEFAULT_VISIBLE_STATUSES;
 }
 
 function loadCachedCalendar(key: string): DayGroup[] | null {

@@ -32,6 +32,7 @@ class FootballDataProvider(EventProvider):
         team_url: str = "https://api.football-data.org/v4/teams/{team_id}/matches",
         teams_url: str = "https://api.football-data.org/v4/teams",
     ) -> None:
+        self.refresh_errors: list[str] = []
         self.token = token or os.getenv("FOOTBALL_DATA_TOKEN")
         self.competition_entities = competition_entities or football_competition_entities()
         self.team_entities = team_entities or football_team_entities()
@@ -81,22 +82,32 @@ class FootballDataProvider(EventProvider):
                     return [self._match_to_event(item) for item in cached]
             raise
 
-        write_football_cache(cache_path, matches)
-        upsert_provider_payload_cache("football-data", cache_key, matches)
+        if not self.refresh_errors:
+            write_football_cache(cache_path, matches)
+            upsert_provider_payload_cache("football-data", cache_key, matches)
 
         return [self._match_to_event(item) for item in matches]
 
     def _fetch_followed_matches(self, start_date, end_date) -> list[dict]:
         matches: list[dict] = []
+        self.refresh_errors = []
 
         # Team feeds cover "all matches for this team", which is the right
         # product model for Barcelona and Ukraine NT. Competition feeds cover
         # standalone interests such as UCL, World Cup, and Euro.
         for entity_id, team_id in self.resolved_team_entities().items():
-            matches.extend(self._fetch_team_matches(team_id, start_date, end_date, entity_id))
+            try:
+                matches.extend(self._fetch_team_matches(team_id, start_date, end_date, entity_id))
+            except Exception as exc:
+                self.refresh_errors.append(f"Team {entity_id}: {exc}")
 
         if self.competition_entities:
-            matches.extend(self._fetch_competition_matches(start_date, end_date))
+            try:
+                matches.extend(self._fetch_competition_matches(start_date, end_date))
+            except Exception as exc:
+                self.refresh_errors.append(f"Competitions: {exc}")
+        if self.refresh_errors and not matches:
+            raise RuntimeError("; ".join(self.refresh_errors))
 
         return dedupe_matches(matches)
 
@@ -115,7 +126,11 @@ class FootballDataProvider(EventProvider):
         if not missing:
             return resolved
 
-        teams = self._fetch_all_teams()
+        try:
+            teams = self._fetch_all_teams()
+        except Exception as exc:
+            self.refresh_errors.append(f"Team discovery: {exc}")
+            return resolved
         for entity_id, queries in missing.items():
             team_id = find_team_id(teams, queries)
             if team_id is not None:
@@ -275,7 +290,7 @@ def football_competition_entities() -> dict[str, str]:
 def football_team_entities() -> dict[str, int]:
     # Team IDs are provider-specific. Keep them configurable so the product can
     # be corrected without code changes if football-data changes an identifier.
-    values = parse_entity_id_map(os.getenv("FOOTBALL_DATA_TEAM_IDS", ""))
+    values = {"barcelona": 81, **parse_entity_id_map(os.getenv("FOOTBALL_DATA_TEAM_IDS", ""))}
     return values
 
 

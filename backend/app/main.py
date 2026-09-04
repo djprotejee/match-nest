@@ -22,7 +22,7 @@ from .emailer import send_verification_email
 from .entity_service import default_entity_color, entity_bindings_from_payload, entity_payload, provider_search_candidates
 from .models import EntityKind, Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserAccount
 from .notifications import dispatch_due_notifications, notification_settings_payload, push_config, rule_payload
-from .providers.registry import fetch_event_details, fetch_events, provider_results
+from .providers.registry import fetch_event_details, fetch_events, provider_results, refresh_is_running
 from .service import (
     effective_event_status,
     filter_events,
@@ -134,6 +134,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-MatchNest-Refreshing"],
 )
 
 
@@ -743,6 +744,7 @@ def tournament_detail(
 
 @app.get("/timeline")
 def timeline(
+    response: Response,
     range: str = Query(default="week", pattern="^(today|week|month)$"),
     level: str | None = "main,starred",
     reveal_spoilers: bool = False,
@@ -758,11 +760,13 @@ def timeline(
         levels=parse_level_set(level),
         apply_f1_session_filter=False,
     )
+    response.headers["X-MatchNest-Refreshing"] = "true" if refresh_is_running(start, end, preferences) else "false"
     return group_by_day(filtered, preferences, reveal_spoilers)
 
 
 @app.get("/calendar/{year}/{month}")
 def calendar_month(
+    response: Response,
     year: int,
     month: int,
     level: str | None = None,
@@ -781,6 +785,7 @@ def calendar_month(
         levels=parse_level_set(level),
         apply_f1_session_filter=False,
     )
+    response.headers["X-MatchNest-Refreshing"] = "true" if refresh_is_running(start, end, preferences) else "false"
     return group_by_day(filtered, preferences, reveal_spoilers)
 
 

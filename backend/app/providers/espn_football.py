@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from calendar import monthrange
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -36,11 +37,13 @@ class EspnFootballProvider(EventProvider):
         competition_entities: dict[str, str] | None = None,
         base_url: str = "https://site.api.espn.com/apis/site/v2/sports/soccer",
     ) -> None:
+        self.refresh_errors: list[str] = []
         self.team_ids = team_ids or {}
         self.competition_entities = competition_entities or {}
         self.base_url = base_url.rstrip("/")
 
     def fetch(self, start: datetime | None = None, end: datetime | None = None) -> list[Event]:
+        self.refresh_errors = []
         start_utc = start.astimezone(timezone.utc) if start else datetime.now(timezone.utc)
         end_utc = end.astimezone(timezone.utc) if end else start_utc
         events: list[Event] = []
@@ -63,13 +66,16 @@ class EspnFootballProvider(EventProvider):
         return sorted(slugs)
 
     def _scoreboard(self, league_slug: str, month_key: str) -> list[dict]:
-        url = f"{self.base_url}/{league_slug}/scoreboard?{urlencode({'dates': month_key})}"
+        last_day = monthrange(int(month_key[:4]), int(month_key[4:]))[1]
+        dates = f"{month_key}01-{month_key}{last_day:02d}"
+        url = f"{self.base_url}/{league_slug}/scoreboard?{urlencode({'dates': dates, 'limit': 1000})}"
         cache_key = f"scoreboard:{league_slug}:{month_key}"
         request = Request(url, headers={"User-Agent": "MatchNest personal schedule app", "Accept": "application/json"})
         try:
             with urlopen(request, timeout=20) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-        except Exception:
+        except Exception as exc:
+            self.refresh_errors.append(f"{league_slug}: {exc}")
             cached = get_cached_provider_payload("espn-football", cache_key)
             payload = cached if isinstance(cached, dict) else {}
         else:
@@ -94,7 +100,8 @@ class EspnFootballProvider(EventProvider):
         try:
             with urlopen(request, timeout=20) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-        except Exception:
+        except Exception as exc:
+            self.refresh_errors.append(f"{league_slug}: {exc}")
             cached = get_cached_provider_payload("espn-football", cache_key)
             return cached if isinstance(cached, dict) else {}
         upsert_provider_payload_cache("espn-football", cache_key, payload)

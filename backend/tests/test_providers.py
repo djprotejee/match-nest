@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from isolated_case import IsolatedTestCase
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -51,7 +52,7 @@ from app.providers.pandascore import (
 from app.storage import upsert_provider_payload_cache
 
 
-class ProviderMappingTests(unittest.TestCase):
+class ProviderMappingTests(IsolatedTestCase):
     def test_f1_datetime_parser_uses_utc(self) -> None:
         parsed = parse_utc_datetime({"date": "2026-06-14", "time": "13:00:00Z"})
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from isolated_case import IsolatedTestCase
 
 from app.details import normalize_event_details
 
 
-class EventDetailsV2Tests(unittest.TestCase):
+class EventDetailsV2Tests(IsolatedTestCase):
     def test_normalize_event_details_preserves_legacy_shape_and_adds_v2_fields(self) -> None:
         details = {
             "event_id": "football-apifootball-42",

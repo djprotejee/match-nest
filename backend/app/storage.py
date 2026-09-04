@@ -596,7 +596,27 @@ def init_db(connection: DatabaseConnection) -> None:
         """
     )
     sync_seed_entities(connection)
+    archive_leaked_test_fixture(connection)
     connection.commit()
+
+
+def archive_leaked_test_fixture(connection: DatabaseConnection) -> bool:
+    # This exact event was written by test_events_roundtrip_through_sqlite.
+    # Archive before deleting, in the same transaction as database setup.
+    row = connection.execute(
+        "SELECT * FROM events WHERE id = ? AND title = ? AND starts_at = ? AND source = ?",
+        ("football-1", "FC Barcelona vs Real Madrid CF", "2026-09-25T19:00:00+00:00", "football-data"),
+    ).fetchone()
+    if row is None:
+        return False
+    now = utc_now().isoformat()
+    connection.execute(
+        """INSERT INTO provider_payload_cache (provider, cache_key, payload_json, fetched_at, updated_at)
+           VALUES (?, ?, ?, ?, ?) ON CONFLICT (provider, cache_key) DO NOTHING""",
+        ("matchnest-repair", "leaked-test-fixture:football-1", json.dumps(dict(row)), now, now),
+    )
+    connection.execute("DELETE FROM events WHERE id = ?", (row["id"],))
+    return True
 
 
 def create_user(email: str, password: str) -> tuple[UserAccount, str]:

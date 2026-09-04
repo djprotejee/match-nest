@@ -11,7 +11,7 @@ from .base import EventProvider
 from .grid import GRID_PROVIDER, grid_cs2_sections, grid_end_state_cache_key, grid_series_id_for_event
 from .hltv import find_hltv_team_rank, hltv_rankings
 from ..models import Event, EventStatus, Sport
-from ..storage import get_cached_provider_payload, upsert_provider_payload_cache
+from ..storage import get_cached_provider_payload, provider_payload_state, upsert_provider_payload_cache
 
 
 class PandaScoreCS2Provider(EventProvider):
@@ -20,6 +20,7 @@ class PandaScoreCS2Provider(EventProvider):
         token: str | None = None,
         base_url: str = "https://api.pandascore.co/csgo/matches",
     ) -> None:
+        self.refresh_errors: list[str] = []
         self.token = token or os.getenv("PANDASCORE_TOKEN")
         self.base_url = base_url
 
@@ -31,6 +32,7 @@ class PandaScoreCS2Provider(EventProvider):
         # can return cancelled TBD matches before finished matches with scores.
         if not self.token:
             return []
+        self.refresh_errors = []
         payload = dedupe_matches(
             [
                 item
@@ -59,8 +61,13 @@ class PandaScoreCS2Provider(EventProvider):
                 )
             query = urlencode(params)
             cache_key = f"matches:{bucket}:{query}"
-            cached_page = get_cached_provider_payload("pandascore", cache_key)
-            if can_use_stable_pandascore_cache(bucket, end) and isinstance(cached_page, list):
+            cached_state = provider_payload_state("pandascore", cache_key)
+            cached_page = cached_state.payload if cached_state else None
+            # A page fetched while the month was in progress is incomplete.
+            # It only becomes a stable historical snapshot if fetched after
+            # that range ended and results had time to settle.
+            stable_snapshot = cached_state is not None and end is not None and cached_state.fetched_at >= end.astimezone(timezone.utc) + timedelta(days=2)
+            if can_use_stable_pandascore_cache(bucket, end) and stable_snapshot and isinstance(cached_page, list) and cached_page:
                 page_items = cached_page
             else:
                 page_items = self._fetch_bucket_page(bucket, query, cache_key)
@@ -86,20 +93,22 @@ class PandaScoreCS2Provider(EventProvider):
         try:
             with urlopen(request, timeout=20) as response:
                 page_items = json.loads(response.read().decode("utf-8"))
-        except Exception:
+        except Exception as exc:
+            self.refresh_errors.append(f"{bucket}: {exc}")
             return None
         if isinstance(page_items, list):
             upsert_provider_payload_cache("pandascore", cache_key, page_items)
             return page_items
+        self.refresh_errors.append(f"{bucket}: invalid response payload")
         return None
 
     def _match_to_event(self, item: dict) -> Event:
         opponents = [opponent.get("opponent", {}).get("name", "") for opponent in item.get("opponents", [])]
         title = " vs ".join([name for name in opponents if name]) or item.get("name", "CS2 match")
-        league = item.get("league", {}).get("name")
-        serie = item.get("serie", {}).get("full_name")
+        league = (item.get("league") or {}).get("name")
+        serie = (item.get("serie") or {}).get("full_name")
         competition = " - ".join([part for part in [league, serie] if part]) or league or serie
-        starts_at = parse_pandascore_datetime(item.get("begin_at"))
+        starts_at = parse_pandascore_datetime(item.get("begin_at") or item.get("scheduled_at"))
         entity_ids = cs2_entity_ids(title, competition)
         entity_ids.extend(pandascore_bound_team_entity_ids(item))
         entity_ids = list(dict.fromkeys(entity_ids))

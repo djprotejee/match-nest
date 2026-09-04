@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+from isolated_case import IsolatedTestCase
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -78,8 +79,9 @@ class _FakeLibsqlConnection:
         self.closed = True
 
 
-class StorageTests(unittest.TestCase):
+class StorageTests(IsolatedTestCase):
     def setUp(self) -> None:
+        super().setUp()
         self.env_patch = patch.dict(os.environ, {"DATABASE_URL": "", "TURSO_DATABASE_URL": ""})
         self.env_patch.start()
 
