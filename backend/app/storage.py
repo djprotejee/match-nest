@@ -847,11 +847,18 @@ def preferences_for_user(user_id: int | None) -> UserPreferences:
         return clone_default_preferences()
     connection = connect()
     try:
-        initialize_user_preferences(connection, user_id)
         settings_row = connection.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,)).fetchone()
-        ui_state_row = connection.execute("SELECT * FROM user_ui_state WHERE user_id = ?", (user_id,)).fetchone()
-        follow_rows = connection.execute("SELECT * FROM user_follows WHERE user_id = ?", (user_id,)).fetchall()
-        connection.commit()
+        if settings_row is None:
+            initialize_user_preferences(connection, user_id)
+            connection.commit()
+            settings_row = connection.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,)).fetchone()
+        # Existing accounts need reads, not default-follow INSERTs on every GET.
+        # Pipeline independent Postgres reads to avoid consecutive round trips.
+        with connection.connection.pipeline() if isinstance(connection, PostgresConnection) else nullcontext():
+            ui_cursor = connection.execute("SELECT * FROM user_ui_state WHERE user_id = ?", (user_id,))
+            follows_cursor = connection.execute("SELECT * FROM user_follows WHERE user_id = ?", (user_id,))
+        ui_state_row = ui_cursor.fetchone()
+        follow_rows = follows_cursor.fetchall()
     finally:
         connection.close()
 
@@ -1632,6 +1639,30 @@ def mark_provider_fetch(provider_name: str, cache_key: str, status: str, error: 
 def provider_fetched_at(provider_name: str, cache_key: str) -> datetime | None:
     state = provider_fetch_state(provider_name, cache_key)
     return state.fetched_at if state else None
+
+
+def provider_fetch_states(keys: list[tuple[str, str]]) -> dict[tuple[str, str], ProviderFetchState]:
+    """Read the month's refresh metadata in one query/connection."""
+    if not keys:
+        return {}
+    clauses = " OR ".join("(provider_name = ? AND cache_key = ?)" for _ in keys)
+    params = [value for key in keys for value in key]
+    connection = connect()
+    try:
+        rows = connection.execute(
+            "SELECT provider_name, cache_key, fetched_at, status, error FROM provider_fetches WHERE " + clauses,
+            params,
+        ).fetchall()
+    finally:
+        connection.close()
+    output = {}
+    for row in rows:
+        try:
+            fetched_at = datetime.fromisoformat(row["fetched_at"]).astimezone(timezone.utc)
+        except (ValueError, TypeError):
+            continue
+        output[(row["provider_name"], row["cache_key"])] = ProviderFetchState(fetched_at, row["status"], row["error"])
+    return output
 
 
 def provider_fetch_state(provider_name: str, cache_key: str) -> ProviderFetchState | None:

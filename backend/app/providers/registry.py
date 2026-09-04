@@ -35,6 +35,7 @@ from ..storage import (
     mark_provider_fetch,
     provider_bindings_for,
     provider_fetch_state,
+    provider_fetch_states,
     upsert_event_details_cache,
     upsert_events,
 )
@@ -123,10 +124,13 @@ def provider_results(
 
     events: list[Event] = []
     results: list[ProviderResult] = []
-    now = datetime.now(timezone.utc)
     db_events = list_events(start, end)
+    providers = configured_providers(preferences)
+    states = provider_fetch_states([(type(provider).__name__, provider_schedule_key(provider, start, end))
+                                    for provider in providers if provider_is_configured(provider)])
+    refreshed_inline = False
 
-    for provider in configured_providers(preferences):
+    for provider in providers:
         name = provider.__class__.__name__
         configured = provider_is_configured(provider)
         if not configured:
@@ -134,12 +138,13 @@ def provider_results(
             continue
         cached_count = len([event for event in db_events if provider_matches_event(name, event)])
         schedule_key = provider_schedule_key(provider, start, end)
-        if not provider_should_refresh(name, schedule_key, start, end):
+        if not provider_fetch_is_due(name, states.get((name, schedule_key)), start, end):
             results.append(ProviderResult(name=name, configured=True, count=cached_count))
             continue
 
         if name == "F4CalendarProvider":
             provider_events = refresh_provider(provider, name, schedule_key, start, end)
+            refreshed_inline = True
             results.append(ProviderResult(name=name, configured=True, count=len(provider_events)))
             continue
 
@@ -155,7 +160,7 @@ def provider_results(
             )
         )
 
-    events = dedupe_cross_source_events(list_events(start, end))
+    events = dedupe_cross_source_events(list_events(start, end) if refreshed_inline else db_events)
     if events:
         write_events_cache(cache_key, events)
     else:
@@ -393,7 +398,10 @@ def provider_is_configured(provider: EventProvider) -> bool:
 
 
 def provider_should_refresh(provider_name: str, cache_key: str, start: datetime | None = None, end: datetime | None = None) -> bool:
-    fetch_state = provider_fetch_state(provider_name, cache_key)
+    return provider_fetch_is_due(provider_name, provider_fetch_state(provider_name, cache_key), start, end)
+
+
+def provider_fetch_is_due(provider_name: str, fetch_state, start: datetime | None = None, end: datetime | None = None) -> bool:
     if fetch_state is None:
         return True
     if fetch_state.status != "ok":

@@ -72,6 +72,7 @@ import {
   visibleCalendarDays,
 } from "./dateUtils";
 import { refreshDelay } from "./requestCache";
+import { CALENDAR_DEFAULTS_VERSION, CALENDAR_STATUSES, restoredCalendarStatuses, calendarLoadMessage, shiftedCalendarMonth } from "./calendarState";
 import { appendManualPins, filterGroups, findConflicts, flattenGroups, followLevelsForFeedMode, mergeFollowOverrides } from "./eventFilters";
 import type { AuthUser, DayGroup, EntityItem, EntitySearchResult, EventDetails, EventStatus, FollowLevel, MatchEvent, NotificationRule, NotificationSettings, RangeFilter, RegisterResponse, Sport, TournamentDetail, TournamentSummary } from "./types";
 
@@ -79,7 +80,7 @@ type Tab = "timeline" | "calendar" | "tournament" | "explore" | "settings";
 
 const STATUS_DEFAULTS_VERSION = 6;
 const DEFAULT_VISIBLE_STATUSES: EventStatus[] = ["live", "delayed", "upcoming"];
-const DEFAULT_CALENDAR_STATUSES: EventStatus[] = ["past", "live", "delayed", "upcoming", "tbd"];
+const DEFAULT_CALENDAR_STATUSES = CALENDAR_STATUSES;
 
 export function App() {
   const [tab, setTab] = useState<Tab>("timeline");
@@ -93,6 +94,9 @@ export function App() {
   const [monthCursor, setMonthCursor] = useState(() => new Date());
   const [timeline, setTimeline] = useState<DayGroup[]>([]);
   const [calendarGroups, setCalendarGroups] = useState<DayGroup[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarRefreshing, setCalendarRefreshing] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
   const [entities, setEntities] = useState<EntityItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -170,6 +174,7 @@ export function App() {
       range, feedMode, importanceMode, sports: Array.from(sports),
       timelineStatuses: Array.from(timelineStatuses), calendarStatuses: Array.from(calendarStatuses),
       statusDefaultsVersion: STATUS_DEFAULTS_VERSION,
+      calendarStatusDefaultsVersion: CALENDAR_DEFAULTS_VERSION,
     });
     const serialized = JSON.stringify(payload);
     if (serialized === savedSettings.current) return;
@@ -263,11 +268,18 @@ export function App() {
     const levels = followLevelsForFeedMode(feedMode, state.customFeedLevels);
     const cacheKey = `matchnest.account.${currentUser.id}.${calendarCacheKey(year, month, levels)}.${state.hideSpoilers}`;
     const cached = loadCachedCalendar(cacheKey);
-    if (!quiet) setCalendarGroups(cached || []);
+    if (!quiet) {
+      setCalendarGroups(cached || []);
+      setCalendarLoading(!cached || cached.length === 0);
+      setCalendarRefreshing(false);
+      setCalendarError(null);
+    }
     try {
       let refreshing = false;
       const nextGroups = await fetchCalendar(year, month, !state.hideSpoilers, levels, (value) => { refreshing = value; });
       if (request !== calendarRequest.current) return;
+      setCalendarRefreshing(refreshing);
+      setCalendarError(null);
       if (nextGroups.length || !refreshing) {
         setCalendarGroups(nextGroups);
         localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), groups: nextGroups }));
@@ -279,7 +291,11 @@ export function App() {
     } catch (error) {
       if (request !== calendarRequest.current) return;
       setLastError(readErrorMessage(error));
+      setCalendarError(readErrorMessage(error));
+      setCalendarRefreshing(false);
       setOffline(true);
+    } finally {
+      if (request === calendarRequest.current) setCalendarLoading(false);
     }
   }
 
@@ -369,9 +385,7 @@ export function App() {
     if (Array.isArray(uiState.timelineStatuses)) {
       setTimelineStatuses(new Set(normalizeStoredStatuses(uiState.timelineStatuses, shouldMigrateStatusDefaults)));
     }
-    if (Array.isArray(uiState.calendarStatuses)) {
-      setCalendarStatuses(new Set(normalizeStoredStatuses(uiState.calendarStatuses, shouldMigrateStatusDefaults, true)));
-    }
+    setCalendarStatuses(restoredCalendarStatuses(uiState));
     if (Array.isArray(uiState.customFeedLevels)) {
       updateState({ customFeedLevels: uiState.customFeedLevels.filter((value): value is FollowLevel => typeof value === "string") });
     }
@@ -398,7 +412,10 @@ export function App() {
   function scheduleCalendarRetry() {
     const retryKey = `matchnest.account.${currentUser?.id}.${calendarCacheKey(monthCursor.getFullYear(), monthCursor.getMonth() + 1, followLevelsForFeedMode(feedMode, state.customFeedLevels))}.${state.hideSpoilers}`;
     const count = calendarRetryCountsRef.current[retryKey] || 0;
-    if (calendarRetryRef.current !== null || refreshDelay(count) === null) {
+    if (calendarRetryRef.current !== null) return;
+    if (refreshDelay(count) === null) {
+      setCalendarRefreshing(false);
+      setCalendarError("The refresh is taking longer than expected. Retry to check for matches.");
       return;
     }
     calendarRetryCountsRef.current[retryKey] = count + 1;
@@ -608,6 +625,12 @@ export function App() {
       {tab === "calendar" ? (
         <CalendarScreen
           groups={filteredCalendar}
+          loading={calendarLoading}
+          refreshing={calendarRefreshing}
+          error={calendarError}
+          totalEvents={mergedCalendar.reduce((total, group) => total + group.events.length, 0)}
+          onShowAll={() => { setCalendarStatuses(new Set(CALENDAR_STATUSES)); setSports(new Set(SPORTS)); setImportanceMode("all"); }}
+          onRetry={() => void refreshVisible()}
           monthCursor={monthCursor}
           setMonthCursor={setMonthCursor}
           feedMode={feedMode}
@@ -908,6 +931,12 @@ function TimelineScreen(props: {
 
 function CalendarScreen(props: {
   groups: DayGroup[];
+  loading: boolean;
+  refreshing: boolean;
+  error: string | null;
+  totalEvents: number;
+  onShowAll: () => void;
+  onRetry: () => void;
   monthCursor: Date;
   setMonthCursor: (date: Date) => void;
   feedMode: FeedMode;
@@ -936,6 +965,8 @@ function CalendarScreen(props: {
   const [selectedEnd, setSelectedEnd] = useState<string | null>(() => defaultCalendarEnd(props.monthCursor, props.statuses));
   const selectedGroups = filterGroupsByDateRange(props.groups, selectedStart, selectedEnd);
   const selectedEventCount = selectedGroups.reduce((total, group) => total + group.events.length, 0);
+  const loadMessage = calendarLoadMessage(props.loading, props.refreshing, props.error, props.groups);
+  const allHidden = !props.groups.length && props.totalEvents > 0;
 
   useEffect(() => {
     setSelectedStart(defaultCalendarStart(props.monthCursor, props.statuses));
@@ -943,8 +974,7 @@ function CalendarScreen(props: {
   }, [props.monthCursor, props.statuses]);
 
   function shiftMonth(offset: number) {
-    const next = new Date(props.monthCursor);
-    next.setMonth(next.getMonth() + offset);
+    const next = shiftedCalendarMonth(props.monthCursor, offset);
     props.setMonthCursor(next);
     setSelectedStart(defaultCalendarStart(next, props.statuses));
     setSelectedEnd(defaultCalendarEnd(next, props.statuses));
@@ -1037,6 +1067,19 @@ function CalendarScreen(props: {
         </button>
       </section>
 
+      {loadMessage ? (
+        <div className="loading-card" role="status">
+          {loadMessage}
+          {props.error ? <button className="text-action" type="button" onClick={props.onRetry}>Retry</button> : null}
+        </div>
+      ) : null}
+      {allHidden ? (
+        <div className="empty-state" role="status">
+          {props.totalEvents} events are hidden by your calendar filters.
+          <button className="text-action" type="button" onClick={props.onShowAll}>Show all statuses and sports</button>
+        </div>
+      ) : null}
+
       <section className="calendar-grid" aria-label="Month calendar">
         {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
           <span className="weekday" key={day}>
@@ -1074,7 +1117,7 @@ function CalendarScreen(props: {
         ) : null}
       </section>
 
-      <EventGroups
+      {(!loadMessage && !allHidden) || selectedGroups.length > 0 ? <EventGroups
         groups={selectedGroups}
         categories={props.categories}
         watch={props.watch}
@@ -1082,7 +1125,7 @@ function CalendarScreen(props: {
         onWatch={props.onWatch}
         onReveal={props.onReveal}
         onRemoveManual={props.onRemoveManual}
-      />
+      /> : null}
     </main>
   );
 }
@@ -2733,6 +2776,7 @@ function accountSettingsPayload(state: AppState, viewState: {
   timelineStatuses: EventStatus[];
   calendarStatuses: EventStatus[];
   statusDefaultsVersion: number;
+  calendarStatusDefaultsVersion: number;
 }): {
   f1_sessions: string[];
   hide_spoilers: boolean;
