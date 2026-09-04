@@ -22,7 +22,7 @@ from .emailer import send_verification_email
 from .entity_service import default_entity_color, entity_bindings_from_payload, entity_payload, provider_search_candidates
 from .models import EntityKind, Event, EventStatus, F1Session, Follow, FollowLevel, KYIV_TZ, Sport, UserAccount
 from .notifications import dispatch_due_notifications, notification_settings_payload, push_config, rule_payload
-from .providers.registry import fetch_event_details, fetch_events, provider_results, refresh_is_running, configured_providers, provider_is_configured, provider_matches_event, provider_schedule_key, provider_date_range
+from .providers.registry import fetch_event_details, fetch_events, provider_results, refresh_is_running, configured_providers, provider_is_configured, provider_matches_event, provider_schedule_key, provider_date_range, merged_stored_event
 from .service import (
     effective_event_status,
     filter_events,
@@ -617,7 +617,8 @@ def spoiler_safe_event_details(details: dict, event, preferences, reveal_spoiler
 
 def is_spoiler_sensitive_section(section: dict) -> bool:
     title = str(section.get("title") or "").lower()
-    return any(token in title for token in SPOILER_SENSITIVE_SECTION_TOKENS)
+    columns = " ".join(str(column).lower() for column in section.get("columns", []))
+    return any(token in title or token in columns for token in SPOILER_SENSITIVE_SECTION_TOKENS)
 
 
 def tournament_key_for_event(event: Event) -> str:
@@ -707,7 +708,7 @@ def event_by_id(
     event = get_event(event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found.")
-    return serialize_event(event, preferences, reveal_spoilers)
+    return serialize_event(merged_stored_event(event), preferences, reveal_spoilers)
 
 
 @app.get("/tournaments")

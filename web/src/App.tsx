@@ -2148,21 +2148,14 @@ function EventCard(props: {
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const shouldHideResult = event.result_hidden && !event.result_summary;
 
-  useEffect(() => {
-    if (!detailsOpen || !details || !props.revealed) {
-      return;
-    }
-    void loadDetails(true);
-  }, [props.revealed]);
-
-  async function loadDetails(revealSpoilers = props.revealed) {
+  async function loadDetails() {
     if (event.sport !== "formula" && event.sport !== "cs2" && event.sport !== "football") {
       return;
     }
     setDetailsLoading(true);
     setDetailsError(null);
     try {
-      setDetails(await fetchEventDetails(event.id, revealSpoilers));
+      setDetails(await fetchEventDetails(event.id, true));
     } catch (error) {
       setDetailsError(readErrorMessage(error));
     } finally {
@@ -2179,7 +2172,7 @@ function EventCard(props: {
     if (details || (event.sport !== "formula" && event.sport !== "cs2" && event.sport !== "football")) {
       return;
     }
-    await loadDetails(props.revealed);
+    await loadDetails();
   }
 
   return (

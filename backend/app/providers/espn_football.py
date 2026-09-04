@@ -272,13 +272,14 @@ def espn_details_payload(event_id: str, item: dict, league_slug: str, summary_pa
     if item.get("date"):
         facts.append({"label": "Kickoff", "value": str(item["date"])})
 
+    show_score = bool(status.get("completed")) or status.get("state") in {"in", "post"}
     sections = [
         {
             "title": "Teams",
             "columns": ["Side", "Team", "Score"],
             "rows": [
-                [str(home.get("home_away") or "home"), str(home.get("name") or "-"), str(home.get("score") or "-")],
-                [str(away.get("home_away") or "away"), str(away.get("name") or "-"), str(away.get("score") or "-")],
+                [str(home.get("home_away") or "home"), str(home.get("name") or "-"), str(home.get("score")) if show_score and home.get("score") is not None else "-"],
+                [str(away.get("home_away") or "away"), str(away.get("name") or "-"), str(away.get("score")) if show_score and away.get("score") is not None else "-"],
             ],
         }
     ]

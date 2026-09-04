@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import re
+import unicodedata
 import os
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError
@@ -272,7 +274,9 @@ _DETAIL_LOCKS = [threading.Lock() for _ in range(32)]
 
 def fetch_event_details(event_id: str) -> dict | None:
     with _DETAIL_LOCKS[hash(event_id) % len(_DETAIL_LOCKS)]:
-        return _fetch_event_details(event_id)
+        details = _fetch_event_details(event_id)
+        event = get_event(event_id)
+        return football_details_with_stored_result(details, event) if event and event.sport == Sport.FOOTBALL else details
 
 
 def _fetch_event_details(event_id: str) -> dict | None:
@@ -649,12 +653,86 @@ def dedupe_cross_source_events(events: list[Event]) -> list[Event]:
     for event in events:
         key = cross_source_event_key(event)
         existing = by_key.get(key)
-        if existing is None or source_priority.get(event.source, 0) > source_priority.get(existing.source, 0):
+        if existing is None:
             by_key[key] = event
+            continue
+        preferred, secondary = (event, existing) if source_priority.get(event.source, 0) > source_priority.get(existing.source, 0) else (existing, event)
+        # Keep the preferred ID stable for saved watch state, but retain data
+        # available only from the other feed. Never mutate the stored records.
+        result_donor = preferred if preferred.result_summary else secondary
+        by_key[key] = replace(
+            preferred,
+            entity_ids=list(dict.fromkeys(preferred.entity_ids + secondary.entity_ids)),
+            result_summary=result_donor.result_summary,
+            status=result_donor.status if result_donor.result_summary else preferred.status,
+            importance=max(preferred.importance, secondary.importance),
+        )
     return sorted(by_key.values(), key=lambda event: (event.starts_at or datetime.max.replace(tzinfo=timezone.utc), event.title))
 
 
 def cross_source_event_key(event: Event) -> tuple[str, str, str]:
     starts_at = event.starts_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M") if event.starts_at else "tbd"
     title = " ".join(event.title.lower().replace("@", " vs ").split())
+    if event.sport == Sport.FOOTBALL:
+        teams = re.split(r"\s+vs\.?\s+", title)
+        if len(teams) == 2:
+            # Preserve home/away order and age/gender/squad qualifiers.
+            title = " vs ".join(normalize_football_team_name(team) for team in teams)
     return (event.sport.value, starts_at, title)
+
+
+def normalize_football_team_name(name: str) -> str:
+    value = "".join(char for char in unicodedata.normalize("NFKD", name.lower()) if not unicodedata.combining(char))
+    words = re.sub(r"[\W_]+", " ", value).split()
+    while words and words[0] in {"fc", "cf", "afc"}:
+        words.pop(0)
+    while words and words[-1] in {"fc", "cf", "afc"}:
+        words.pop()
+    value = " ".join(words)
+    # Exact provider aliases; avoid substring/fuzzy matching unrelated teams.
+    return {"rayo vallecano de madrid": "rayo vallecano"}.get(value, value)
+
+
+def football_details_with_stored_result(details: dict | None, event: Event) -> dict:
+    related = matching_stored_events(event)
+    merged = dedupe_cross_source_events(related)[0]
+    if details is None:
+        details = {
+            "event_id": event.id, "sport": "football", "source": event.source,
+            "summary": merged.title,
+            "facts": [{"label": "Competition", "value": event.competition or "Unknown"},
+                      {"label": "Status", "value": merged.status.value},
+                      {"label": "Kickoff", "value": event.starts_at.isoformat() if event.starts_at else "TBD"}],
+            "sections": [],
+        }
+    details = normalize_event_details(details)
+    if merged.result_summary and not details.get("score"):
+        details["summary"] = merged.result_summary
+        for fact in details["facts"]:
+            if str(fact.get("label", "")).lower() == "status":
+                fact["value"] = merged.status.value
+        # A stale scheduled ESPN payload can contain placeholder zero scores.
+        # Keep the teams, but use the known stored result as the score display.
+        for section in details["sections"]:
+            if str(section.get("title", "")).lower() == "teams":
+                columns = section.get("columns", [])
+                keep = [i for i, column in enumerate(columns) if str(column).lower() != "score"]
+                section["columns"] = [columns[i] for i in keep]
+                section["rows"] = [[row[i] for i in keep if i < len(row)] for row in section.get("rows", [])]
+        details["sections"].insert(0, {"title": "Score", "columns": ["Result"], "rows": [[merged.result_summary]]})
+        donor = next((item for item in related if item.result_summary == merged.result_summary), event)
+        details["facts"].append({"label": "Result source", "value": donor.source})
+    return normalize_event_details(details)
+
+
+def matching_stored_events(event: Event) -> list[Event]:
+    if event.sport != Sport.FOOTBALL or event.starts_at is None:
+        return [event]
+    return [candidate for candidate in list_events(event.starts_at - timedelta(minutes=1), event.starts_at + timedelta(minutes=1))
+            if cross_source_event_key(candidate) == cross_source_event_key(event)] or [event]
+
+
+def merged_stored_event(event: Event) -> Event:
+    merged = dedupe_cross_source_events(matching_stored_events(event))[0]
+    # Direct links must retain their requested ID, even for a secondary source.
+    return replace(merged, id=event.id)
